@@ -92,8 +92,8 @@
     (unwind-protect
          (progn
            (let ((cs (clauth:register-changeset
-                      'u '(:email "a@b" :password "hunter22"
-                           :password-confirmation "hunter22"))))
+                      'u '(:email "a@b" :password "hunter22-extra"
+                           :password-confirmation "hunter22-extra"))))
              (is (clecto:cs-valid-p cs))
              ;; The hash is on the cs, the raw password is virtual so
              ;; it never reaches the SQL.
@@ -102,7 +102,7 @@
                (is (not (null record)))
                (is (not (member :password record)))))
            ;; happy path: right password
-           (is (not (null (clauth:authenticate r 'u "a@b" "hunter22"))))
+           (is (not (null (clauth:authenticate r 'u "a@b" "hunter22-extra"))))
            ;; wrong password
            (is (null (clauth:authenticate r 'u "a@b" "wrong")))
            ;; missing user
@@ -111,7 +111,7 @@
 
 (test register-rejects-mismatched-confirmation
   (let ((cs (clauth:register-changeset
-             'u '(:email "a@b" :password "hunter22"
+             'u '(:email "a@b" :password "hunter22-extra"
                   :password-confirmation "different"))))
     (is (not (clecto:cs-valid-p cs)))))
 
@@ -190,8 +190,8 @@ echos the current user id (or 'anon')."
     (unwind-protect
          (let* ((user (nth-value 0 (clecto:repo-insert
                                     r (clauth:register-changeset
-                                       'u '(:email "x@y" :password "hunter22"
-                                            :password-confirmation "hunter22")))))
+                                       'u '(:email "x@y" :password "hunter22-extra"
+                                            :password-confirmation "hunter22-extra")))))
                 (uid  (getf user :id))
                 (store (clug:make-memory-store))
                 (planted-sid "fixated-sid-deadbeef")
@@ -262,8 +262,8 @@ echos the current user id (or 'anon')."
     (unwind-protect
          (let* ((user (nth-value 0 (clecto:repo-insert
                                     r (clauth:register-changeset
-                                       'u '(:email "s@s" :password "hunter22"
-                                            :password-confirmation "hunter22")))))
+                                       'u '(:email "s@s" :password "hunter22-extra"
+                                            :password-confirmation "hunter22-extra")))))
                 (uid (getf user :id))
                 (store (clug:make-memory-store))
                 (sid "good-sid-1234")
@@ -284,14 +284,14 @@ echos the current user id (or 'anon')."
     (unwind-protect
          (progn
            (clecto:repo-insert r (clauth:register-changeset
-                                  'u '(:email "v@v" :password "hunter22"
-                                       :password-confirmation "hunter22")))
+                                  'u '(:email "v@v" :password "hunter22-extra"
+                                       :password-confirmation "hunter22-extra")))
            ;; Read raw SQL to confirm there's no :password column emitted
-           ;; AND the value "hunter22" isn't sitting in any cell.
+           ;; AND the value "hunter22-extra" isn't sitting in any cell.
            (let* ((rows (clecto:repo-execute r "SELECT * FROM users")))
              (dolist (row rows)
                (loop for (k v) on row by #'cddr do
-                 (is (not (search "hunter22"
+                 (is (not (search "hunter22-extra"
                                   (cond ((stringp v) v) (t (princ-to-string v))))))))))
       (clecto:sqlite-close a))))
 
@@ -302,18 +302,18 @@ echos the current user id (or 'anon')."
     (unwind-protect
          (let* ((user (nth-value 0 (clecto:repo-insert
                                     r (clauth:register-changeset
-                                       'u '(:email "cp@x" :password "hunter22"
-                                            :password-confirmation "hunter22")))))
+                                       'u '(:email "cp@x" :password "hunter22-extra"
+                                            :password-confirmation "hunter22-extra")))))
                 (existing (list* :__schema__ 'u user))
                 (cs (clauth:change-password-changeset
                      existing
-                     '(:current-password "hunter22"
+                     '(:current-password "hunter22-extra"
                        :password "newpassword99"
                        :password-confirmation "newpassword99"))))
            (is (clecto:cs-valid-p cs))
            (clecto:repo-update r cs)
            ;; old password no longer authenticates; new one does
-           (is (null (clauth:authenticate r 'u "cp@x" "hunter22")))
+           (is (null (clauth:authenticate r 'u "cp@x" "hunter22-extra")))
            (is (not (null (clauth:authenticate r 'u "cp@x" "newpassword99")))))
       (clecto:sqlite-close a))))
 
@@ -322,8 +322,8 @@ echos the current user id (or 'anon')."
     (unwind-protect
          (let* ((user (nth-value 0 (clecto:repo-insert
                                     r (clauth:register-changeset
-                                       'u '(:email "cp2@x" :password "hunter22"
-                                            :password-confirmation "hunter22")))))
+                                       'u '(:email "cp2@x" :password "hunter22-extra"
+                                            :password-confirmation "hunter22-extra")))))
                 (existing (list* :__schema__ 'u user))
                 (cs (clauth:change-password-changeset
                      existing
@@ -339,8 +339,8 @@ echos the current user id (or 'anon')."
     (unwind-protect
          (let* ((user (nth-value 0 (clecto:repo-insert
                                     r (clauth:register-changeset
-                                       'u '(:email "cp3@x" :password "hunter22"
-                                            :password-confirmation "hunter22")))))
+                                       'u '(:email "cp3@x" :password "hunter22-extra"
+                                            :password-confirmation "hunter22-extra")))))
                 (existing (list* :__schema__ 'u user))
                 (cs (clauth:change-password-changeset
                      existing
@@ -355,12 +355,12 @@ echos the current user id (or 'anon')."
     (unwind-protect
          (let* ((user (nth-value 0 (clecto:repo-insert
                                     r (clauth:register-changeset
-                                       'u '(:email "cp4@x" :password "hunter22"
-                                            :password-confirmation "hunter22")))))
+                                       'u '(:email "cp4@x" :password "hunter22-extra"
+                                            :password-confirmation "hunter22-extra")))))
                 (existing (list* :__schema__ 'u user))
                 (cs (clauth:change-password-changeset
                      existing
-                     '(:current-password "hunter22"
+                     '(:current-password "hunter22-extra"
                        :password "newpassword99"
                        :password-confirmation "different"))))
            (is (not (clecto:cs-valid-p cs))))
@@ -373,16 +373,16 @@ echos the current user id (or 'anon')."
     (unwind-protect
          (let* ((user (nth-value 0 (clecto:repo-insert
                                     r (clauth:register-changeset
-                                       'u '(:email "old@x" :password "hunter22"
-                                            :password-confirmation "hunter22")))))
+                                       'u '(:email "old@x" :password "hunter22-extra"
+                                            :password-confirmation "hunter22-extra")))))
                 (existing (list* :__schema__ 'u user))
                 (cs (clauth:change-email-changeset
                      existing
-                     '(:email "new@x" :current-password "hunter22"))))
+                     '(:email "new@x" :current-password "hunter22-extra"))))
            (is (clecto:cs-valid-p cs))
            (clecto:repo-update r cs)
-           (is (not (null (clauth:authenticate r 'u "new@x" "hunter22"))))
-           (is (null (clauth:authenticate r 'u "old@x" "hunter22"))))
+           (is (not (null (clauth:authenticate r 'u "new@x" "hunter22-extra"))))
+           (is (null (clauth:authenticate r 'u "old@x" "hunter22-extra"))))
       (clecto:sqlite-close a))))
 
 (test change-email-requires-current-password
@@ -390,8 +390,8 @@ echos the current user id (or 'anon')."
     (unwind-protect
          (let* ((user (nth-value 0 (clecto:repo-insert
                                     r (clauth:register-changeset
-                                       'u '(:email "ce@x" :password "hunter22"
-                                            :password-confirmation "hunter22")))))
+                                       'u '(:email "ce@x" :password "hunter22-extra"
+                                            :password-confirmation "hunter22-extra")))))
                 (existing (list* :__schema__ 'u user))
                 (cs (clauth:change-email-changeset
                      existing
@@ -405,12 +405,12 @@ echos the current user id (or 'anon')."
     (unwind-protect
          (let* ((user (nth-value 0 (clecto:repo-insert
                                     r (clauth:register-changeset
-                                       'u '(:email "noop@x" :password "hunter22"
-                                            :password-confirmation "hunter22")))))
+                                       'u '(:email "noop@x" :password "hunter22-extra"
+                                            :password-confirmation "hunter22-extra")))))
                 (existing (list* :__schema__ 'u user))
                 (cs (clauth:change-email-changeset
                      existing
-                     '(:email "noop@x" :current-password "hunter22"))))
+                     '(:email "noop@x" :current-password "hunter22-extra"))))
            (is (not (clecto:cs-valid-p cs)))
            (is (assoc :email (clecto:cs-errors cs))))
       (clecto:sqlite-close a))))
@@ -422,8 +422,8 @@ echos the current user id (or 'anon')."
     (unwind-protect
          (let* ((user (nth-value 0 (clecto:repo-insert
                                     r (clauth:register-changeset
-                                       'u '(:email "st@x" :password "hunter22"
-                                            :password-confirmation "hunter22")))))
+                                       'u '(:email "st@x" :password "hunter22-extra"
+                                            :password-confirmation "hunter22-extra")))))
                 (uid (getf user :id))
                 (store (clug:make-memory-store))
                 (sid "stale-sid")
@@ -457,8 +457,8 @@ echos the current user id (or 'anon')."
     (unwind-protect
          (let* ((user (nth-value 0 (clecto:repo-insert
                                     r (clauth:register-changeset
-                                       'u '(:email "st2@x" :password "hunter22"
-                                            :password-confirmation "hunter22")))))
+                                       'u '(:email "st2@x" :password "hunter22-extra"
+                                            :password-confirmation "hunter22-extra")))))
                 (uid (getf user :id))
                 (store (clug:make-memory-store))
                 (sid "fresh-sid")
@@ -495,78 +495,75 @@ echos the current user id (or 'anon')."
          (progn
            (let* ((user (nth-value 0 (clecto:repo-insert
                                       r (clauth:register-changeset
-                                         'u '(:email "v2@x" :password "hunter22"
-                                              :password-confirmation "hunter22"))))))
+                                         'u '(:email "v2@x" :password "hunter22-extra"
+                                              :password-confirmation "hunter22-extra"))))))
              (clecto:repo-update r (clauth:change-password-changeset
                                     (list* :__schema__ 'u user)
-                                    '(:current-password "hunter22"
+                                    '(:current-password "hunter22-extra"
                                       :password "fresh-secret-99"
                                       :password-confirmation "fresh-secret-99"))))
            (let ((rows (clecto:repo-execute r "SELECT * FROM users")))
              (dolist (row rows)
                (loop for (k v) on row by #'cddr do
                  (let ((s (cond ((stringp v) v) (t (princ-to-string v)))))
-                   (is (not (search "hunter22"        s)))
+                   (is (not (search "hunter22-extra"        s)))
                    (is (not (search "fresh-secret-99" s))))))))
       (clecto:sqlite-close a))))
 
-(test password-change-bumps-session-version
-  (multiple-value-bind (r a) (fresh-repo)
+(test update-password!-deletes-all-tokens
+  ;; phx.gen.auth model: a password change purges every auth_tokens row
+  ;; for that user, forcing every device to re-auth on its next request.
+  (multiple-value-bind (r a) (fresh-repo-with-tokens)
     (unwind-protect
-         (let* ((user (nth-value 0 (clecto:repo-insert
-                                    r (clauth:register-changeset
-                                       'u '(:email "sv@x" :password "hunter22"
-                                            :password-confirmation "hunter22")))))
-                (before (or (getf user :session-version) 0)))
-           (clecto:repo-update r (clauth:change-password-changeset
-                                  (list* :__schema__ 'u user)
-                                  '(:current-password "hunter22"
-                                    :password "newpw1234"
-                                    :password-confirmation "newpw1234")))
-           (let ((reloaded (clecto:repo-get r 'u (getf user :id))))
-             (is (> (or (getf reloaded :session-version) 0) before))))
+         (let* ((user (seed-user r "upd@x" "hunter22-extra"))
+                (raw1 (nth-value 0 (clauth:create-token r 'auth-token user)))
+                (raw2 (nth-value 0 (clauth:create-token r 'auth-token user))))
+           (declare (ignore raw1 raw2))
+           (multiple-value-bind (rec err)
+               (clauth:update-password! r 'u 'auth-token user
+                 '(:current-password "hunter22-extra"
+                   :password "newpw1234fresh"
+                   :password-confirmation "newpw1234fresh"))
+             (is (null err))
+             (is (not (null rec))))
+           ;; both tokens gone
+           (let ((rows (clecto:repo-all r (clecto:from :auth-tokens))))
+             (is (zerop (length rows)))))
       (clecto:sqlite-close a))))
 
-(test stale-session-version-forces-logout
-  ;; Simulate two devices: device A logs in (v=0). User on device B
-  ;; changes their password (v becomes 1). Device A's next request
-  ;; should be logged out automatically.
-  (multiple-value-bind (r a) (fresh-repo)
+(test password-change-forces-other-devices-to-logout
+  ;; phx.gen.auth contract: after a password change, every other device's
+  ;; session token has been deleted and load-current-user finds nothing.
+  (multiple-value-bind (r a) (fresh-repo-with-tokens)
     (unwind-protect
-         (let* ((user (nth-value 0 (clecto:repo-insert
-                                    r (clauth:register-changeset
-                                       'u '(:email "ml@x" :password "hunter22"
-                                            :password-confirmation "hunter22")))))
-                (uid (getf user :id))
-                (store (clug:make-memory-store))
-                (sid "device-A-sid")
-                ;; cookie minted at v=0
-                (data (let ((h (make-hash-table :test 'equal)))
-                        (setf (gethash :user-id h) uid)
-                        (setf (gethash :session-version h) 0)
-                        h))
-                (_ (clug:store-save store sid data))
-                ;; meanwhile device B changes password -> stored v=1
-                (_ (clecto:repo-update r (clauth:change-password-changeset
-                                          (list* :__schema__ 'u user)
-                                          '(:current-password "hunter22"
-                                            :password "newpw1234"
-                                            :password-confirmation "newpw1234"))))
-                (app (clug:with-session
-                       (clug:to-clack-app
-                        (clug:pipeline
-                         (clauth:load-current-user r 'u)
-                         (lambda (c)
-                           (clug:put-resp c 200
-                                          (if (clauth:current-user c)
-                                              "alive" "stale")))))
-                       :store store))
-                (response (funcall app
-                                   (env-with-cookie (format nil "clug.session=~a" sid)))))
-           (declare (ignore _))
-           (is (equal "stale" (first (third response))))
-           ;; old sid removed
-           (is (null (clug:store-load store sid))))
+         (let* ((user (seed-user r "ml@x" "hunter22-extra"))
+                ;; device A has a session token
+                (device-a-raw (nth-value 0 (clauth:create-token r 'auth-token user))))
+           ;; meanwhile device B changes the password
+           (clauth:update-password! r 'u 'auth-token user
+             '(:current-password "hunter22-extra"
+               :password "newpw1234"
+               :password-confirmation "newpw1234"))
+           ;; device A's token is now gone
+           (let* ((store (clug:make-memory-store))
+                  (sid "device-A-sid")
+                  (data (let ((h (make-hash-table :test 'equal)))
+                          (setf (gethash :user-token h) device-a-raw) h))
+                  (_ (clug:store-save store sid data))
+                  (app (clug:with-session
+                         (clug:to-clack-app
+                          (clug:pipeline
+                           (clauth:load-current-user r 'u
+                                                     :token-schema 'auth-token)
+                           (lambda (c)
+                             (clug:put-resp c 200
+                                            (if (clauth:current-user c)
+                                                "alive" "stale")))))
+                         :store store))
+                  (response (funcall app
+                                     (env-with-cookie (format nil "clug.session=~a" sid)))))
+             (declare (ignore _))
+             (is (equal "stale" (first (third response))))))
       (clecto:sqlite-close a))))
 
 (test email-normalized-on-register-and-authenticate
@@ -576,17 +573,17 @@ echos the current user id (or 'anon')."
            ;; uppercase + leading/trailing whitespace
            (clecto:repo-insert r (clauth:register-changeset
                                   'u '(:email " Mixed@CASE.com "
-                                       :password "hunter22"
-                                       :password-confirmation "hunter22")))
+                                       :password "hunter22-extra"
+                                       :password-confirmation "hunter22-extra")))
            ;; authenticate with different casing succeeds
-           (is (not (null (clauth:authenticate r 'u "mixed@case.com" "hunter22"))))
-           (is (not (null (clauth:authenticate r 'u "MIXED@CASE.COM" "hunter22"))))
+           (is (not (null (clauth:authenticate r 'u "mixed@case.com" "hunter22-extra"))))
+           (is (not (null (clauth:authenticate r 'u "MIXED@CASE.COM" "hunter22-extra"))))
            ;; second register with same-but-recased should collide
            (multiple-value-bind (rec err)
                (clecto:repo-insert r (clauth:register-changeset
                                       'u '(:email "MIXED@case.com"
-                                           :password "hunter22"
-                                           :password-confirmation "hunter22")))
+                                           :password "hunter22-extra"
+                                           :password-confirmation "hunter22-extra")))
              (is (null rec))
              (is (assoc :email (clecto:cs-errors err)))))
       (clecto:sqlite-close a))))
@@ -599,8 +596,8 @@ echos the current user id (or 'anon')."
     (unwind-protect
          (let* ((user (nth-value 0 (clecto:repo-insert
                                     r (clauth:register-changeset
-                                       'u '(:email "sk@x" :password "hunter22"
-                                            :password-confirmation "hunter22")))))
+                                       'u '(:email "sk@x" :password "hunter22-extra"
+                                            :password-confirmation "hunter22-extra")))))
                 (uid (getf user :id))
                 (store (clug:make-memory-store))
                 (sid "skew-sid")
@@ -649,7 +646,7 @@ echos the current user id (or 'anon')."
   (multiple-value-bind (r a) (fresh-repo)
     (unwind-protect
          (progn
-           (seed-user r "lk@x" "hunter22")
+           (seed-user r "lk@x" "hunter22-extra")
            ;; 5 wrong attempts (default threshold)
            (dotimes (n 5)
              (multiple-value-bind (user reason)
@@ -663,7 +660,7 @@ echos the current user id (or 'anon')."
              (is (eq :locked reason)))
            ;; even the RIGHT password returns :locked while the lock holds
            (multiple-value-bind (user reason)
-               (clauth:authenticate-with-lockout r 'u "lk@x" "hunter22")
+               (clauth:authenticate-with-lockout r 'u "lk@x" "hunter22-extra")
              (is (null user))
              (is (eq :locked reason))))
       (clecto:sqlite-close a))))
@@ -672,7 +669,7 @@ echos the current user id (or 'anon')."
   (multiple-value-bind (r a) (fresh-repo)
     (unwind-protect
          (progn
-           (seed-user r "lk2@x" "hunter22")
+           (seed-user r "lk2@x" "hunter22-extra")
            ;; rack up 3 fails (below threshold of 5)
            (dotimes (n 3)
              (clauth:authenticate-with-lockout r 'u "lk2@x" "wrong"))
@@ -680,7 +677,7 @@ echos the current user id (or 'anon')."
              (is (= 3 (getf u :failed-login-count))))
            ;; success resets the counter
            (multiple-value-bind (user reason)
-               (clauth:authenticate-with-lockout r 'u "lk2@x" "hunter22")
+               (clauth:authenticate-with-lockout r 'u "lk2@x" "hunter22-extra")
              (is (not (null user)))
              (is (null reason)))
            (let ((u (clecto:repo-get-by r 'u '(:email "lk2@x"))))
@@ -707,7 +704,7 @@ echos the current user id (or 'anon')."
   ;; the counter twice.
   (multiple-value-bind (r a) (fresh-repo)
     (unwind-protect
-         (let* ((user (seed-user r "race@x" "hunter22")))
+         (let* ((user (seed-user r "race@x" "hunter22-extra")))
            (clauth::record-failed-attempt! r 'u user 100 60)
            (clauth::record-failed-attempt! r 'u user 100 60)
            (let ((reloaded (clecto:repo-get-by r 'u '(:email "race@x"))))
@@ -718,7 +715,7 @@ echos the current user id (or 'anon')."
   (multiple-value-bind (r a) (fresh-repo)
     (unwind-protect
          (progn
-           (seed-user r "lk3@x" "hunter22")
+           (seed-user r "lk3@x" "hunter22-extra")
            ;; threshold of 2, very short window
            (clauth:authenticate-with-lockout r 'u "lk3@x" "wrong"
                                              :max-attempts 2)
@@ -738,6 +735,7 @@ echos the current user id (or 'anon')."
   (:user-id    :integer)
   (:token-hash :string)
   (:context    :string)
+  (:authenticated-at :naive-datetime)
   (:session-version :integer)
   (:expires-at :naive-datetime)
   (:timestamps))
@@ -749,6 +747,7 @@ echos the current user id (or 'anon')."
                                 user_id INTEGER,
                                 token_hash TEXT UNIQUE,
                                 context TEXT,
+                                authenticated_at TEXT,
                                 session_version INTEGER DEFAULT 0,
                                 expires_at TEXT,
                                 inserted_at TEXT, updated_at TEXT)")
@@ -757,7 +756,7 @@ echos the current user id (or 'anon')."
 (test api-token-mint-and-validate
   (multiple-value-bind (r a) (fresh-repo-with-tokens)
     (unwind-protect
-         (let* ((user (seed-user r "t@x" "hunter22"))
+         (let* ((user (seed-user r "t@x" "hunter22-extra"))
                 (uid (getf user :id)))
            (multiple-value-bind (raw record)
                (clauth:create-token r 'auth-token user)
@@ -776,7 +775,7 @@ echos the current user id (or 'anon')."
 (test api-token-respects-context
   (multiple-value-bind (r a) (fresh-repo-with-tokens)
     (unwind-protect
-         (let* ((user (seed-user r "t2@x" "hunter22"))
+         (let* ((user (seed-user r "t2@x" "hunter22-extra"))
                 (uid (getf user :id))
                 (raw (nth-value 0 (clauth:create-token r 'auth-token user
                                                        :context "api"))))
@@ -791,7 +790,7 @@ echos the current user id (or 'anon')."
 (test api-token-expiry
   (multiple-value-bind (r a) (fresh-repo-with-tokens)
     (unwind-protect
-         (let* ((user (seed-user r "t3@x" "hunter22"))
+         (let* ((user (seed-user r "t3@x" "hunter22-extra"))
                 (uid (getf user :id))
                 ;; already-expired token
                 (raw (nth-value 0 (clauth:create-token r 'auth-token user
@@ -802,7 +801,7 @@ echos the current user id (or 'anon')."
 (test api-token-revoke
   (multiple-value-bind (r a) (fresh-repo-with-tokens)
     (unwind-protect
-         (let* ((user (seed-user r "t4@x" "hunter22"))
+         (let* ((user (seed-user r "t4@x" "hunter22-extra"))
                 (uid (getf user :id))
                 (raw nil)
                 (rec nil))
@@ -816,7 +815,7 @@ echos the current user id (or 'anon')."
 (test api-token-revoke-all-by-context
   (multiple-value-bind (r a) (fresh-repo-with-tokens)
     (unwind-protect
-         (let* ((user (seed-user r "t5@x" "hunter22"))
+         (let* ((user (seed-user r "t5@x" "hunter22-extra"))
                 (uid (getf user :id))
                 (api-raw (nth-value 0 (clauth:create-token r 'auth-token user
                                                            :context "api")))
@@ -832,7 +831,7 @@ echos the current user id (or 'anon')."
 (test bearer-plug-loads-user
   (multiple-value-bind (r a) (fresh-repo-with-tokens)
     (unwind-protect
-         (let* ((user (seed-user r "b@x" "hunter22"))
+         (let* ((user (seed-user r "b@x" "hunter22-extra"))
                 (uid (getf user :id))
                 (raw (nth-value 0 (clauth:create-token r 'auth-token user))))
            (let* ((plug (clauth:load-current-user-from-bearer
@@ -921,7 +920,7 @@ echos the current user id (or 'anon')."
          (clauth:*auth-telemetry* (lambda (e p) (push (cons e p) events))))
     (multiple-value-bind (r a) (fresh-repo)
       (unwind-protect
-           (let* ((user (seed-user r "tel@x" "hunter22"))
+           (let* ((user (seed-user r "tel@x" "hunter22-extra"))
                   (store (clug:make-memory-store))
                   (app (clug:with-session
                          (lambda (env)
@@ -932,7 +931,7 @@ echos the current user id (or 'anon')."
                          :store store)))
              (funcall app (env-with-cookie nil))
              ;; success login + success authenticate-with-lockout
-             (clauth:authenticate-with-lockout r 'u "tel@x" "hunter22")
+             (clauth:authenticate-with-lockout r 'u "tel@x" "hunter22-extra")
              (clauth:authenticate-with-lockout r 'u "tel@x" "wrong")
              (clauth:authenticate-with-lockout r 'u "ghost@x" "x")
              (let ((kinds (mapcar #'car events)))
@@ -949,29 +948,24 @@ echos the current user id (or 'anon')."
                                     (error "boom"))))
     (multiple-value-bind (r a) (fresh-repo)
       (unwind-protect
-           (let* ((user (seed-user r "te@x" "hunter22")))
+           (let* ((user (seed-user r "te@x" "hunter22-extra")))
              (is (eq user user))   ; insert succeeded despite broken sink
              (multiple-value-bind (got reason)
-                 (clauth:authenticate-with-lockout r 'u "te@x" "hunter22")
+                 (clauth:authenticate-with-lockout r 'u "te@x" "hunter22-extra")
                (declare (ignore reason))
                (is (not (null got)))))
         (clecto:sqlite-close a)))))
 
 ;;; --- D2: logout-all-sessions ---
 
-(test logout-all-sessions-bumps-version-and-purges-tokens
+(test logout-all-sessions-purges-tokens
   (multiple-value-bind (r a) (fresh-repo-with-tokens)
     (unwind-protect
-         (let* ((user (seed-user r "all@x" "hunter22"))
+         (let* ((user (seed-user r "all@x" "hunter22-extra"))
                 (uid  (getf user :id))
-                (raw  (nth-value 0 (clauth:create-token r 'auth-token user)))
-                (before (or (getf user :session-version) 0)))
+                (raw  (nth-value 0 (clauth:create-token r 'auth-token user))))
            (clauth:logout-all-sessions r 'u 'auth-token uid)
-           ;; token gone
-           (is (null (clauth:find-and-validate-token r 'auth-token raw)))
-           ;; session-version bumped
-           (let ((u2 (clecto:repo-get r 'u uid)))
-             (is (> (or (getf u2 :session-version) 0) before))))
+           (is (null (clauth:find-and-validate-token r 'auth-token raw))))
       (clecto:sqlite-close a))))
 
 ;;; --- D3: remember-me ---
@@ -979,7 +973,7 @@ echos the current user id (or 'anon')."
 (test remember-me-survives-session-expiry
   (multiple-value-bind (r a) (fresh-repo-with-tokens)
     (unwind-protect
-         (let* ((user (seed-user r "rm@x" "hunter22"))
+         (let* ((user (seed-user r "rm@x" "hunter22-extra"))
                 (store (clug:make-memory-store))
                 ;; first request: log in with remember-me set
                 (login-app
@@ -1026,7 +1020,7 @@ echos the current user id (or 'anon')."
   ;; logout now accepts :repo / :token-schema and revokes both.
   (multiple-value-bind (r a) (fresh-repo-with-tokens)
     (unwind-protect
-         (let* ((user (seed-user r "lwo@x" "hunter22"))
+         (let* ((user (seed-user r "lwo@x" "hunter22-extra"))
                 (raw  (nth-value 0 (clauth:create-token r 'auth-token user
                                                         :context clauth:*remember-me-context*))))
            ;; simulate a request carrying the remember-me cookie
@@ -1058,31 +1052,27 @@ echos the current user id (or 'anon')."
          (clauth:*auth-telemetry* (lambda (e p) (push (list e p) events))))
     (multiple-value-bind (r a) (fresh-repo)
       (unwind-protect
-           (let* ((user (seed-user r "cc@x" "hunter22")))
+           (let* ((user (seed-user r "cc@x" "hunter22-extra")))
              (clecto:repo-update r (clauth:change-password-changeset
                                     (list* :__schema__ 'u user)
-                                    '(:current-password "hunter22"
+                                    '(:current-password "hunter22-extra"
                                       :password "fresh-pw-99"
                                       :password-confirmation "fresh-pw-99")))
              (is (some (lambda (e) (eq :credentials-changed (first e)))
                        events)))
         (clecto:sqlite-close a)))))
 
-(test remember-me-rejects-stale-session-version
-  ;; Same remember-me, but the user changed their password in between.
-  ;; The cookie's stamped version is now below the user's stored value
-  ;; → the plug ignores it and even revokes the row.
+(test remember-me-rejected-after-password-change
+  ;; update-password! deletes the token row; remember-me cookies now
+  ;; pointing at deleted rows fail to authenticate.
   (multiple-value-bind (r a) (fresh-repo-with-tokens)
     (unwind-protect
-         (let* ((user (seed-user r "rm2@x" "hunter22"))
-                (raw  (nth-value 0 (clauth:create-token r 'auth-token user
-                                                        :context clauth:*remember-me-context*))))
-           ;; user changes password → session-version bumps
-           (clecto:repo-update r (clauth:change-password-changeset
-                                  (list* :__schema__ 'u user)
-                                  '(:current-password "hunter22"
-                                    :password "fresh-pw-123"
-                                    :password-confirmation "fresh-pw-123")))
+         (let* ((user (seed-user r "rm2@x" "hunter22-extra"))
+                (raw  (nth-value 0 (clauth:create-token r 'auth-token user))))
+           (clauth:update-password! r 'u 'auth-token user
+             '(:current-password "hunter22-extra"
+               :password "fresh-pw-123"
+               :password-confirmation "fresh-pw-123"))
            (let* ((app (clug:with-session
                          (clug:to-clack-app
                           (clug:pipeline
@@ -1098,10 +1088,151 @@ echos the current user id (or 'anon')."
                                       (format nil "~a=~a"
                                               clauth:*remember-me-cookie-key*
                                               raw)))))
-             (is (equal "anon" (first (third response))))
-             ;; token row was purged
-             (is (null (clauth:find-and-validate-token r 'auth-token raw
-                                                       :context clauth:*remember-me-context*)))))
+             (is (equal "anon" (first (third response))))))
+      (clecto:sqlite-close a))))
+
+;;; --- phx.gen.auth mirror: return-to + redirect plugs ---
+
+(test require-auth-redirect-mode-captures-return-to-on-get
+  (let* ((store (clug:make-memory-store))
+         (app (clug:with-session
+                (clug:to-clack-app
+                 (lambda (c)
+                   (clauth:require-auth c :redirect-to "/login")))
+                :store store))
+         (env (list :request-method :get :path-info "/dashboard"
+                    :query-string nil
+                    :headers (make-hash-table :test 'equal)))
+         (response (funcall app env)))
+    (is (= 302 (first response)))
+    (is (equal "/login"
+               (loop for (k v) on (second response) by #'cddr
+                     when (and (stringp k) (string= k "location"))
+                     return v)))))
+
+(test require-auth-redirect-mode-skips-return-to-on-post
+  (let* ((store (clug:make-memory-store))
+         (captured nil)
+         (app (clug:with-session
+                (clug:to-clack-app
+                 (lambda (c)
+                   (let ((out (clauth:require-auth c :redirect-to "/login")))
+                     (setf captured (clug:get-session-value
+                                     out clauth:*session-return-to-key*))
+                     out)))
+                :store store))
+         (env (list :request-method :post :path-info "/orders/new"
+                    :query-string nil
+                    :headers (make-hash-table :test 'equal))))
+    (funcall app env)
+    ;; POST path NOT captured — Phoenix's contract.
+    (is (null captured))))
+
+(test redirect-if-authenticated-bounces-logged-in-user
+  (let* ((conn (conn-with-current-user '(:id 1)))
+         (out (funcall (clauth:redirect-if-authenticated :redirect-to "/home")
+                       conn)))
+    (is (clug:conn-halted-p out))
+    (is (= 302 (clug:conn-status out)))))
+
+(test redirect-if-authenticated-passes-anonymous
+  (let* ((conn (clug:make-conn))
+         (out (funcall (clauth:redirect-if-authenticated :redirect-to "/home")
+                       conn)))
+    (is (not (clug:conn-halted-p out)))))
+
+(test valid-email-shape-p-matches-phoenix-regex
+  ;; Phoenix: ~r/^[^@,;\s]+@[^@,;\s]+$/
+  (is (clauth:valid-email-shape-p "a@b"))
+  (is (clauth:valid-email-shape-p "user.name+tag@example.com"))
+  (is (not (clauth:valid-email-shape-p "no-at-sign")))
+  (is (not (clauth:valid-email-shape-p "two@@signs")))
+  (is (not (clauth:valid-email-shape-p "has space@x")))
+  (is (not (clauth:valid-email-shape-p "a,b@x")))
+  (is (not (clauth:valid-email-shape-p "@x")))
+  (is (not (clauth:valid-email-shape-p "x@"))))
+
+;;; --- audit follow-ups ---
+
+(test log-in-and-redirect-rejects-open-redirect-target
+  ;; A planted return-to of "//evil.com" must NOT become Location.
+  (multiple-value-bind (r a) (fresh-repo-with-tokens)
+    (unwind-protect
+         (let* ((user (seed-user r "or@x" "hunter22-extra"))
+                (store (clug:make-memory-store))
+                (app (clug:with-session
+                       (clug:to-clack-app
+                        (lambda (c)
+                          ;; pretend the session has a malicious return-to
+                          (setf c (clug:put-session-value
+                                   c clauth:*session-return-to-key*
+                                   "//evil.com/steal"))
+                          (clauth:log-in-and-redirect
+                           c user :repo r :token-schema 'auth-token
+                           :default-path "/safe")))
+                       :store store))
+                (response (funcall app
+                                   (list :request-method :get
+                                         :path-info "/" :query-string nil
+                                         :headers (make-hash-table :test 'equal))))
+                (location (loop for (k v) on (second response) by #'cddr
+                                when (and (stringp k) (string= k "location"))
+                                return v)))
+           (is (= 302 (first response)))
+           (is (equal "/safe" location)))
+      (clecto:sqlite-close a))))
+
+(test return-to-includes-query-string
+  (let* ((store (clug:make-memory-store))
+         (captured nil)
+         (app (clug:with-session
+                (clug:to-clack-app
+                 (lambda (c)
+                   (let ((out (clauth:require-auth c :redirect-to "/login")))
+                     (setf captured (clug:get-session-value
+                                     out clauth:*session-return-to-key*))
+                     out)))
+                :store store))
+         (env (list :request-method :get
+                    :path-info "/dashboard"
+                    :query-string "tab=billing&sort=desc"
+                    :headers (make-hash-table :test 'equal))))
+    (funcall app env)
+    (is (equal "/dashboard?tab=billing&sort=desc" captured))))
+
+(test session-timeout-fires-for-token-based-sessions
+  ;; H3 regression: under token-mode, current-user-id is nil so the
+  ;; OLD session-timeout short-circuited. Now it also checks the
+  ;; session-token cell.
+  (multiple-value-bind (r a) (fresh-repo-with-tokens)
+    (unwind-protect
+         (let* ((user (seed-user r "tt@x" "hunter22-extra"))
+                (raw (nth-value 0 (clauth:build-session-token r 'auth-token user)))
+                (store (clug:make-memory-store))
+                (sid "tok-sid")
+                (data (let ((h (make-hash-table :test 'equal)))
+                        (setf (gethash :user-token h) raw)
+                        (setf (gethash :last-activity-at h)
+                              (- (get-universal-time) 9999))
+                        h))
+                (_ (clug:store-save store sid data))
+                (app (clug:with-session
+                       (clug:to-clack-app
+                        (clug:pipeline
+                         (clauth:session-timeout :max-idle-seconds 1800)
+                         (clauth:load-current-user r 'u :token-schema 'auth-token)
+                         (lambda (c)
+                           (clug:put-resp c 200
+                                          (if (clauth:current-user c)
+                                              "alive" "expired")))))
+                       :store store))
+                (response (funcall app
+                                   (env-with-cookie (format nil "clug.session=~a" sid)))))
+           (declare (ignore _))
+           ;; session-timeout saw the token, decided "stale", called logout.
+           ;; Token row should be gone too.
+           (is (equal "expired" (first (third response))))
+           (is (null (clauth:find-and-validate-token r 'auth-token raw))))
       (clecto:sqlite-close a))))
 
 (test require-role-uses-equal-no-coercion
@@ -1113,16 +1244,13 @@ echos the current user id (or 'anon')."
     (is (clug:conn-halted-p out))
     (is (= 403 (clug:conn-status out)))))
 
-(test bearer-plug-rejects-stale-session-version
-  ;; Phoenix-style: changing the password must instantly invalidate
-  ;; every existing API token. We do that by stamping the user's
-  ;; session-version on the token at mint and rejecting tokens whose
-  ;; stored value is below the user's current value.
+(test bearer-plug-rejected-after-password-change
+  ;; Phoenix-style: changing the password deletes every existing token,
+  ;; so the bearer plug can't find the row anymore.
   (multiple-value-bind (r a) (fresh-repo-with-tokens)
     (unwind-protect
-         (let* ((user (seed-user r "stale@x" "hunter22"))
+         (let* ((user (seed-user r "stale@x" "hunter22-extra"))
                 (raw  (nth-value 0 (clauth:create-token r 'auth-token user))))
-           ;; bearer plug accepts the token initially
            (let* ((plug (clauth:load-current-user-from-bearer
                          r :user-schema 'u :token-schema 'auth-token))
                   (conn (clug:make-conn
@@ -1132,12 +1260,10 @@ echos the current user id (or 'anon')."
                                             (format nil "Bearer ~a" raw))
                                       h)))))
              (is (not (null (clauth:current-user (funcall plug conn))))))
-           ;; user changes password (bumps session-version)
-           (clecto:repo-update r (clauth:change-password-changeset
-                                  (list* :__schema__ 'u user)
-                                  '(:current-password "hunter22"
-                                    :password "fresh-secret-99"
-                                    :password-confirmation "fresh-secret-99")))
+           (clauth:update-password! r 'u 'auth-token user
+             '(:current-password "hunter22-extra"
+               :password "fresh-secret-99"
+               :password-confirmation "fresh-secret-99"))
            ;; same token, same plug, but now rejected
            (let* ((plug (clauth:load-current-user-from-bearer
                          r :user-schema 'u :token-schema 'auth-token))
@@ -1153,7 +1279,7 @@ echos the current user id (or 'anon')."
 (test revoke-tokens-on-credential-change-clears-store
   (multiple-value-bind (r a) (fresh-repo-with-tokens)
     (unwind-protect
-         (let* ((user (seed-user r "rev@x" "hunter22"))
+         (let* ((user (seed-user r "rev@x" "hunter22-extra"))
                 (uid (getf user :id))
                 (raw (nth-value 0 (clauth:create-token r 'auth-token user))))
            (clauth:revoke-tokens-on-credential-change r 'auth-token uid)
@@ -1163,7 +1289,7 @@ echos the current user id (or 'anon')."
 (test bearer-plug-rejects-wrong-context
   (multiple-value-bind (r a) (fresh-repo-with-tokens)
     (unwind-protect
-         (let* ((user (seed-user r "b2@x" "hunter22"))
+         (let* ((user (seed-user r "b2@x" "hunter22-extra"))
                 (uid (getf user :id))
                 ;; mint a remember-me token; bearer plug looking for :api
                 ;; must not accept it.
@@ -1187,12 +1313,12 @@ echos the current user id (or 'anon')."
     (unwind-protect
          (progn
            (clecto:repo-insert r (clauth:register-changeset
-                                  'u '(:email "a@b" :password "hunter22"
-                                       :password-confirmation "hunter22")))
+                                  'u '(:email "a@b" :password "hunter22-extra"
+                                       :password-confirmation "hunter22-extra")))
            (multiple-value-bind (rec err)
                (clecto:repo-insert r (clauth:register-changeset
-                                      'u '(:email "a@b" :password "hunter22"
-                                           :password-confirmation "hunter22")))
+                                      'u '(:email "a@b" :password "hunter22-extra"
+                                           :password-confirmation "hunter22-extra")))
              (is (null rec))
              (is (assoc :email (clecto:cs-errors err)))))
       (clecto:sqlite-close a))))

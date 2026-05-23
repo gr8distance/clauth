@@ -19,14 +19,69 @@
 
 (defun auth-token-fields ()
   "Splice into a clecto schema body to declare the auth-token table.
-:SESSION-VERSION mirrors the user's value at mint time so a credential
-change (which bumps the user's version) instantly invalidates every
-existing token — see LOAD-CURRENT-USER-FROM-BEARER for the check."
-  '((:user-id        :integer)
-    (:token-hash     :string)
-    (:context        :string)
-    (:session-version :integer)
-    (:expires-at     :naive-datetime)))
+
+Contexts used by clauth:
+  \"session\"      — DB-backed session token (per device, per browser)
+  \"remember-me\"  — long-lived cookie token
+  \"api\"          — bearer / programmatic access (when wired up)
+
+:authenticated-at records when the token was minted; reserved for
+sudo-mode style re-auth checks. :session-version is legacy and kept
+for backward compat — credential changes now invalidate sessions by
+DELETING token rows (see Phoenix gen.auth), not by bumping a version."
+  '((:user-id          :integer)
+    (:token-hash       :string)
+    (:context          :string)
+    (:authenticated-at :naive-datetime)
+    (:session-version  :integer)
+    (:expires-at       :naive-datetime)))
+
+;;; --- session-token primitives (mirror Phoenix's build_session_token) ---
+
+(defvar *session-context* "session"
+  "Context value identifying session tokens in auth_tokens. Must match
+phx.gen.auth's expectation for symmetry of behavior.")
+
+(defvar *session-token-validity-seconds* (* 14 24 60 60)
+  "Lifetime of a session token. Matches phx.gen.auth's 14-day default.")
+
+(defvar *session-token-reissue-after-seconds* (* 7 24 60 60)
+  "Half-life past which load-current-user reissues a new token (and
+deletes the old one). 7 days, matching Phoenix.")
+
+(defun build-session-token (repo token-schema user)
+  "Mint a fresh session-context token for USER. Returns (values raw record).
+RAW goes into the clug/session cookie; the DB row is what the next
+request looks up. SHA-256 storage (not raw like Phoenix) because clug
+cookies are not signed."
+  (create-token repo token-schema user
+                :context *session-context*
+                :expires-in *session-token-validity-seconds*))
+
+(defun load-user-by-session-token (repo user-schema token-schema raw-token)
+  "Look up the session token by hash, then fetch the user it points at.
+Returns (values user token-record) on hit, NIL otherwise.
+
+In the phx.gen.auth model, invalidation is row deletion (no
+session-version dance). UPDATE-PASSWORD! / UPDATE-EMAIL! delete every
+token row for the user; subsequent requests find nothing here and the
+plug logs the user out."
+  (let* ((token (and raw-token
+                     (find-and-validate-token
+                      repo token-schema raw-token
+                      :context *session-context*)))
+         (user (and token (clecto:repo-get
+                           repo user-schema (getf token :user-id)))))
+    (when (and token user)
+      (values user token))))
+
+(defun delete-session-token (repo token-schema raw-token)
+  "Look up the session row by hash and delete it. Idempotent if the
+row is already gone."
+  (when raw-token
+    (let ((row (find-and-validate-token repo token-schema raw-token
+                                        :context *session-context*)))
+      (when row (revoke-token repo token-schema (getf row :id))))))
 
 (defvar *default-api-token-ttl-seconds* (* 60 60 24 30)
   "Default lifetime for API tokens. 30 days.")
@@ -35,13 +90,11 @@ existing token — see LOAD-CURRENT-USER-FROM-BEARER for the check."
                      &key (context "api")
                           (expires-in *default-api-token-ttl-seconds*))
   "Mint a new token bound to USER. USER must be a loaded record (a plist
-with at least :ID and ideally :SESSION-VERSION) — we stamp the user's
-current session-version onto the token so credential changes invalidate
-it. Pass a freshly-loaded record; don't recycle a stale one.
+with at least :ID and ideally :SESSION-VERSION).
 
 Returns (values raw-token record). Hand RAW-TOKEN to the user once
 (never re-display it); the DB only stores its SHA-256 hash. EXPIRES-IN
-is in seconds; pass NIL for a non-expiring token (use sparingly)."
+is in seconds; pass NIL for a non-expiring token."
   (unless (consp user)
     (error "create-token requires a loaded user record (got ~s). ~
             Look it up with repo-get first." user))
@@ -50,6 +103,10 @@ is in seconds; pass NIL for a non-expiring token (use sparingly)."
          (version (or (getf user :session-version) 0))
          (raw    (generate-token))
          (hash   (token-hash raw))
+         ;; UTC throughout — :authenticated-at is compared against
+         ;; cutoffs derived from UNIVERSAL-TIME-TO-NAIVE (also UTC),
+         ;; so the reissue half-life is stable across timezones / DST.
+         (now    (clecto:now-utc-datetime))
          (expiry (when expires-in
                    (universal-time-to-naive
                     (+ (get-universal-time) expires-in))))
@@ -57,9 +114,10 @@ is in seconds; pass NIL for a non-expiring token (use sparingly)."
                           (list :user-id user-id
                                 :token-hash hash
                                 :context context
+                                :authenticated-at now
                                 :session-version version
                                 :expires-at expiry)
-                          '(:user-id :token-hash :context
+                          '(:user-id :token-hash :context :authenticated-at
                             :session-version :expires-at))))
     (multiple-value-bind (record err) (clecto:repo-insert repo cs)
       (when err (error "create-token: insert failed: ~a"
@@ -99,6 +157,66 @@ lookup is a direct hash-equality on a unique index."
   "Delete a token by its primary key."
   (clecto:repo-delete repo token-schema token-id))
 
+(defun update-password! (repo user-schema token-schema user attrs
+                         &key (min-length 12) (max-length 1024))
+  "One-shot password change: build a change-password-changeset from
+ATTRS, update the user, and delete every auth_tokens row so other
+devices are forced to re-auth. Mirrors Phoenix's
+Accounts.update_user_password/3.
+
+USER may be a loaded record plist (we splice :__schema__ in for the
+changeset). Returns (values updated-record NIL) on success or
+(values NIL invalid-cs) on validation/constraint failure.
+
+Atomicity: the user update and the token purge run inside a single
+repo-transaction.
+
+IMPORTANT — the CALLING session is also killed. Phoenix's controller
+calls log_in_user immediately after a successful password update to
+re-establish a session on the same device. Mirror that:
+
+  (multiple-value-bind (rec err) (update-password! ...)
+    (when rec
+      (setf conn (login conn rec :repo r :token-schema 'auth-token))))
+
+Without this, the user clicks 'Save' and is logged out from the very
+device they were using."
+  (let* ((data (list* :__schema__ user-schema user))
+         (cs (change-password-changeset data attrs
+                                        :min-length min-length
+                                        :max-length max-length))
+         (result-rec nil) (result-err nil))
+    (cond
+      ((not (clecto:cs-valid-p cs)) (values nil cs))
+      (t
+       (clecto:repo-transaction (repo)
+         (multiple-value-bind (rec err) (clecto:repo-update repo cs)
+           (setf result-rec rec result-err err)
+           (cond
+             (err (clecto:rollback))
+             (rec (revoke-all-tokens-for-user repo token-schema
+                                              (getf rec :id))))))
+       (values result-rec result-err)))))
+
+(defun update-email! (repo user-schema token-schema user attrs)
+  "One-shot email change: gate on current password, update email,
+purge tokens. Mirrors Phoenix Accounts.update_user_email/3 (the
+in-app form path; the confirmation-by-link path needs a mailer)."
+  (let* ((data (list* :__schema__ user-schema user))
+         (cs (change-email-changeset data attrs))
+         (result-rec nil) (result-err nil))
+    (cond
+      ((not (clecto:cs-valid-p cs)) (values nil cs))
+      (t
+       (clecto:repo-transaction (repo)
+         (multiple-value-bind (rec err) (clecto:repo-update repo cs)
+           (setf result-rec rec result-err err)
+           (cond
+             (err (clecto:rollback))
+             (rec (revoke-all-tokens-for-user repo token-schema
+                                              (getf rec :id))))))
+       (values result-rec result-err)))))
+
 (defun revoke-tokens-on-credential-change (repo token-schema user-id)
   "Convenience wrapper: drop every token row for USER-ID across all
 contexts. Phoenix's contract on a password/email change is 'kill
@@ -113,33 +231,20 @@ so they don't accumulate in the DB."
 
 (defun logout-all-sessions (repo user-schema token-schema user-id)
   "Force EVERY device this user is signed in on to log out on its next
-request. Implementation:
-  - bump :session-version on the user row (the version stamped on
-    every existing cookie / bearer token now compares stale)
-  - purge bearer/remember-me tokens from the DB so they stop taking
-    up space
+request. Implementation: purge all auth_tokens rows for the user. The
+next request from any device that holds a (now-invalid) token finds
+nothing in the table and load-current-user logs it out.
 
-Use cases: 'log me out everywhere' button, panic 'my account was
-hacked', admin-forced logout.
+USER-SCHEMA is reserved for future use (e.g. clearing an :authenticated-at
+column when sudo-mode lands). Currently unused.
 
-NOTE: the CALLING session is not killed — the conn handling this
-request still sees the (now-stale) :session-version on its in-memory
-session data. The next request from this user's browser will see the
-bumped value and load-current-user will logout. Render a 'you've been
-signed out everywhere — sign in again' page directly; the user will
-hit re-login on their next action."
-  (let* ((schema (clecto::find-schema user-schema))
-         (table  (clecto::intern-table schema)))
-    (clecto:repo-update-all
-     repo
-     (clecto:where (clecto:from table) (list '= :id user-id))
-     (list :session-version
-           (list :fragment "\"session_version\" + 1")))
-    (revoke-all-tokens-for-user repo token-schema user-id)
-    ;; "all" as a string for consistency with other :context values
-    ;; ("api", "remember-me", "reset-password") that sinks see.
-    (emit-auth-event :token-revoked (list :user-id user-id :context "all"))
-    t))
+NOTE: the CALLING session is not killed in-request — render a
+'you've been signed out everywhere' page directly; the user re-logs
+in on their next action."
+  (declare (ignore user-schema))
+  (revoke-all-tokens-for-user repo token-schema user-id)
+  (emit-auth-event :token-revoked (list :user-id user-id :context "all"))
+  t)
 
 (defun revoke-all-tokens-for-user (repo token-schema user-id
                                    &key (context nil context-supplied-p))
@@ -184,12 +289,12 @@ token). Pair with REQUIRE-AUTH downstream for the 401."
                                                (getf token :user-id)))))
       (cond
         ((or (null token) (null user)) conn)
-        ((token-session-version-stale-p token user) conn)
         (t (clug:assign conn *current-user-key* user))))))
 
 (defun token-session-version-stale-p (token user)
-  "T when the token was minted before the user's current
-:session-version — i.e. the user has changed credentials and this
-token must die."
-  (< (or (getf token :session-version) 0)
-     (or (getf user  :session-version) 0)))
+  "DEPRECATED. The phx.gen.auth-style invalidation deletes token rows
+on credential change, so a 'stale version' branch is unreachable in
+the new world. Kept exported so old call sites compile; always returns
+NIL."
+  (declare (ignore token user))
+  nil)

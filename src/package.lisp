@@ -17,7 +17,8 @@
   ;; --- changeset ---
   (:export
    #:register-changeset #:password-changeset
-   #:change-password-changeset #:change-email-changeset)
+   #:change-password-changeset #:change-email-changeset
+   #:validate-email-shape #:valid-email-shape-p)
 
   ;; --- repo ---
   (:export
@@ -28,9 +29,13 @@
 
   ;; --- conn / session integration ---
   (:export
-   #:login #:logout #:current-user-id
-   #:load-current-user #:current-user #:require-auth #:require-role
-   #:session-timeout)
+   #:login #:logout #:current-user-id #:current-session-token
+   #:load-current-user #:current-user
+   #:require-auth #:require-role #:redirect-if-authenticated
+   #:log-in-and-redirect
+   #:maybe-store-return-to #:*session-return-to-key*
+   #:session-timeout
+   #:*session-token-key*)
 
   ;; --- telemetry ---
   (:export
@@ -42,9 +47,14 @@
    #:create-token #:find-and-validate-token
    #:revoke-token #:revoke-all-tokens-for-user
    #:revoke-tokens-on-credential-change
+   #:update-password! #:update-email!
    #:logout-all-sessions
    #:load-current-user-from-bearer
-   #:*default-api-token-ttl-seconds*)
+   #:*default-api-token-ttl-seconds*
+   #:*session-context* #:*session-token-validity-seconds*
+   #:*session-token-reissue-after-seconds*
+   #:build-session-token #:load-user-by-session-token
+   #:delete-session-token)
 
   ;; --- remember-me ---
   (:export

@@ -25,7 +25,6 @@ session on its next request."
   '((:email                 :string)
     (:password-hash         :string)
     (:confirmed-at          :naive-datetime)
-    (:session-version       :integer)
     ;; Lockout / rate-limit bookkeeping. Both nil-ok for users who
     ;; have never failed a login.
     (:failed-login-count    :integer)
