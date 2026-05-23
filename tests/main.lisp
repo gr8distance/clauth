@@ -624,7 +624,6 @@ echos the current user id (or 'anon')."
   (:token-hash :string)
   (:context    :string)
   (:authenticated-at :naive-datetime)
-  (:session-version :integer)
   (:expires-at :naive-datetime)
   (:timestamps))
 
@@ -636,7 +635,6 @@ echos the current user id (or 'anon')."
                                 token_hash TEXT UNIQUE,
                                 context TEXT,
                                 authenticated_at TEXT,
-                                session_version INTEGER DEFAULT 0,
                                 expires_at TEXT,
                                 inserted_at TEXT, updated_at TEXT)")
     (values r a)))

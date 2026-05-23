@@ -33,7 +33,6 @@ DELETING token rows (see Phoenix gen.auth), not by bumping a version."
     (:token-hash       :string)
     (:context          :string)
     (:authenticated-at :naive-datetime)
-    (:session-version  :integer)
     (:expires-at       :naive-datetime)))
 
 ;;; --- session-token primitives (mirror Phoenix's build_session_token) ---
@@ -100,7 +99,6 @@ is in seconds; pass NIL for a non-expiring token."
             Look it up with repo-get first." user))
   (let* ((user-id (or (getf user :id)
                       (error "create-token: user record has no :id")))
-         (version (or (getf user :session-version) 0))
          (raw    (generate-token))
          (hash   (token-hash raw))
          ;; UTC throughout — :authenticated-at is compared against
@@ -115,10 +113,9 @@ is in seconds; pass NIL for a non-expiring token."
                                 :token-hash hash
                                 :context context
                                 :authenticated-at now
-                                :session-version version
                                 :expires-at expiry)
                           '(:user-id :token-hash :context :authenticated-at
-                            :session-version :expires-at))))
+                            :expires-at))))
     (multiple-value-bind (record err) (clecto:repo-insert repo cs)
       (when err (error "create-token: insert failed: ~a"
                        (clecto:cs-errors err)))
