@@ -120,3 +120,50 @@ LOAD-CURRENT-USER in the pipeline."
       (clug:halt
        (clug:put-resp conn 401 "{\"error\":\"unauthorized\"}"
                       (list "content-type" "application/json")))))
+
+(defun default-role-reader (user)
+  (getf user :role))
+
+(defun require-role (allowed &key (reader #'default-role-reader))
+  "Return a plug that halts with 403 unless the current user's role is
+in ALLOWED. ALLOWED is a single role value or a list of allowed values
+(compared with EQUAL). READER pulls the role off the user record;
+default is (getf user :role).
+
+If READER returns a list (multi-role user), the check passes when ANY
+element of that list is in ALLOWED. NIL roles never match.
+
+The plug ALSO halts with 401 when no current-user is attached, and
+with 403 when the READER signals an error — so misconfigured readers
+fail closed rather than 500-ing.
+
+clauth has no opinion on how roles are stored: a single :role string
+column, a separate :user_roles join table read via a custom :reader,
+or anything else. The plug only enforces the comparison.
+
+NIL or '() passed as ALLOWED is rejected at plug-construction time —
+a deny-all 'role' is almost always a typo (e.g. an unbound config
+variable). Use a separate (lambda (conn) (clug:halt ...)) if you
+genuinely want one."
+  (let ((allowed-list (if (listp allowed) allowed (list allowed))))
+    (when (null allowed-list)
+      (error "require-role: ALLOWED is empty. Pass at least one role."))
+    (lambda (conn)
+      (let* ((user (current-user conn))
+             (role (and user
+                        (handler-case (funcall reader user)
+                          (error () nil))))
+             (roles (cond ((null role) nil)
+                          ((listp role) role)
+                          (t (list role)))))
+        (cond
+          ((null user)
+           (clug:halt
+            (clug:put-resp conn 401 "{\"error\":\"unauthorized\"}"
+                           (list "content-type" "application/json"))))
+          ((some (lambda (r) (member r allowed-list :test #'equal)) roles)
+           conn)
+          (t
+           (clug:halt
+            (clug:put-resp conn 403 "{\"error\":\"forbidden\"}"
+                           (list "content-type" "application/json")))))))))

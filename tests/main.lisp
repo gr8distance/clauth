@@ -854,6 +854,75 @@ echos the current user id (or 'anon')."
              (is (null (clauth:current-user out)))))
       (clecto:sqlite-close a))))
 
+;;; --- C1: require-role ---
+
+(defun conn-with-current-user (user)
+  (clug:assign (clug:make-conn) :current-user user))
+
+(test require-role-passes-matching-role
+  (let* ((conn (conn-with-current-user '(:id 1 :role "admin")))
+         (out (funcall (clauth:require-role "admin") conn)))
+    (is (not (clug:conn-halted-p out)))))
+
+(test require-role-forbids-wrong-role
+  (let* ((conn (conn-with-current-user '(:id 1 :role "user")))
+         (out (funcall (clauth:require-role "admin") conn)))
+    (is (clug:conn-halted-p out))
+    (is (= 403 (clug:conn-status out)))))
+
+(test require-role-accepts-any-of-many
+  (let* ((conn (conn-with-current-user '(:id 1 :role "mod")))
+         (out (funcall (clauth:require-role '("admin" "mod")) conn)))
+    (is (not (clug:conn-halted-p out)))))
+
+(test require-role-401s-with-no-user
+  (let* ((conn (clug:make-conn))
+         (out (funcall (clauth:require-role "admin") conn)))
+    (is (clug:conn-halted-p out))
+    (is (= 401 (clug:conn-status out)))))
+
+(test require-role-honors-custom-reader
+  (let* ((conn (conn-with-current-user
+                '(:id 1 :roles ("admin" "mod"))))
+         (reader (lambda (u) (first (getf u :roles))))
+         (out (funcall (clauth:require-role "admin" :reader reader) conn)))
+    (is (not (clug:conn-halted-p out)))))
+
+(test require-role-rejects-empty-allowed
+  (signals error (clauth:require-role nil))
+  (signals error (clauth:require-role '())))
+
+(test require-role-supports-multi-role-reader
+  ;; Reader returns a LIST of roles; the plug accepts when any element
+  ;; intersects ALLOWED.
+  (let* ((conn (conn-with-current-user '(:id 1 :roles ("editor" "admin"))))
+         (reader (lambda (u) (getf u :roles)))
+         (out (funcall (clauth:require-role "admin" :reader reader) conn)))
+    (is (not (clug:conn-halted-p out))))
+  (let* ((conn (conn-with-current-user '(:id 1 :roles ("editor" "viewer"))))
+         (reader (lambda (u) (getf u :roles)))
+         (out (funcall (clauth:require-role "admin" :reader reader) conn)))
+    (is (clug:conn-halted-p out))
+    (is (= 403 (clug:conn-status out)))))
+
+(test require-role-reader-errors-fail-closed
+  ;; A misconfigured reader signals — the plug catches and 403s instead
+  ;; of 500-ing.
+  (let* ((conn (conn-with-current-user '(:id 1 :role "admin")))
+         (reader (lambda (u) (declare (ignore u)) (error "boom")))
+         (out (funcall (clauth:require-role "admin" :reader reader) conn)))
+    (is (clug:conn-halted-p out))
+    (is (= 403 (clug:conn-status out)))))
+
+(test require-role-uses-equal-no-coercion
+  ;; Documenting design: role comparison is EQUAL, so "admin" (string)
+  ;; does NOT match :admin (keyword). Apps choose one shape and stick
+  ;; with it across schema, reader, and allowed-list.
+  (let* ((conn (conn-with-current-user '(:id 1 :role "admin")))
+         (out (funcall (clauth:require-role :admin) conn)))
+    (is (clug:conn-halted-p out))
+    (is (= 403 (clug:conn-status out)))))
+
 (test bearer-plug-rejects-stale-session-version
   ;; Phoenix-style: changing the password must instantly invalidate
   ;; every existing API token. We do that by stamping the user's

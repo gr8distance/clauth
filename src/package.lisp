@@ -29,7 +29,7 @@
   ;; --- conn / session integration ---
   (:export
    #:login #:logout #:current-user-id
-   #:load-current-user #:current-user #:require-auth
+   #:load-current-user #:current-user #:require-auth #:require-role
    #:session-timeout)
 
   ;; --- API tokens ---
