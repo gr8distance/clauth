@@ -8,13 +8,15 @@
   :pathname "src/"
   :components ((:file "package")
                (:file "util"      :depends-on ("package"))
+               (:file "telemetry" :depends-on ("package"))
                (:file "password"  :depends-on ("package"))
                (:file "token"     :depends-on ("package"))
                (:file "schema"    :depends-on ("package"))
                (:file "changeset" :depends-on ("util" "password" "schema"))
-               (:file "repo"      :depends-on ("password"))
-               (:file "plug"      :depends-on ("repo"))
-               (:file "api-token" :depends-on ("token" "plug")))
+               (:file "repo"      :depends-on ("password" "telemetry"))
+               (:file "plug"      :depends-on ("repo" "telemetry"))
+               (:file "api-token" :depends-on ("token" "plug" "telemetry"))
+               (:file "remember-me" :depends-on ("api-token" "plug")))
   :in-order-to ((test-op (test-op "clauth/tests"))))
 
 (defsystem "clauth/tests"

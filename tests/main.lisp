@@ -914,6 +914,196 @@ echos the current user id (or 'anon')."
     (is (clug:conn-halted-p out))
     (is (= 403 (clug:conn-status out)))))
 
+;;; --- D1: auth telemetry ---
+
+(test auth-telemetry-fires-on-login-logout-and-auth
+  (let* ((events nil)
+         (clauth:*auth-telemetry* (lambda (e p) (push (cons e p) events))))
+    (multiple-value-bind (r a) (fresh-repo)
+      (unwind-protect
+           (let* ((user (seed-user r "tel@x" "hunter22"))
+                  (store (clug:make-memory-store))
+                  (app (clug:with-session
+                         (lambda (env)
+                           (let ((c (clug:make-conn :req env)))
+                             (clauth:login c user)
+                             (clauth:logout c)
+                             (list 200 nil '(""))))
+                         :store store)))
+             (funcall app (env-with-cookie nil))
+             ;; success login + success authenticate-with-lockout
+             (clauth:authenticate-with-lockout r 'u "tel@x" "hunter22")
+             (clauth:authenticate-with-lockout r 'u "tel@x" "wrong")
+             (clauth:authenticate-with-lockout r 'u "ghost@x" "x")
+             (let ((kinds (mapcar #'car events)))
+               (is (member :login         kinds))
+               (is (member :logout        kinds))
+               (is (member :auth-success  kinds))
+               (is (member :auth-failure  kinds))))
+        (clecto:sqlite-close a)))))
+
+(test auth-telemetry-handler-error-doesnt-break-login
+  ;; A misconfigured sink must not abort authentication.
+  (setf clauth::*auth-telemetry-handler-failed* nil)
+  (let* ((clauth:*auth-telemetry* (lambda (e p) (declare (ignore e p))
+                                    (error "boom"))))
+    (multiple-value-bind (r a) (fresh-repo)
+      (unwind-protect
+           (let* ((user (seed-user r "te@x" "hunter22")))
+             (is (eq user user))   ; insert succeeded despite broken sink
+             (multiple-value-bind (got reason)
+                 (clauth:authenticate-with-lockout r 'u "te@x" "hunter22")
+               (declare (ignore reason))
+               (is (not (null got)))))
+        (clecto:sqlite-close a)))))
+
+;;; --- D2: logout-all-sessions ---
+
+(test logout-all-sessions-bumps-version-and-purges-tokens
+  (multiple-value-bind (r a) (fresh-repo-with-tokens)
+    (unwind-protect
+         (let* ((user (seed-user r "all@x" "hunter22"))
+                (uid  (getf user :id))
+                (raw  (nth-value 0 (clauth:create-token r 'auth-token user)))
+                (before (or (getf user :session-version) 0)))
+           (clauth:logout-all-sessions r 'u 'auth-token uid)
+           ;; token gone
+           (is (null (clauth:find-and-validate-token r 'auth-token raw)))
+           ;; session-version bumped
+           (let ((u2 (clecto:repo-get r 'u uid)))
+             (is (> (or (getf u2 :session-version) 0) before))))
+      (clecto:sqlite-close a))))
+
+;;; --- D3: remember-me ---
+
+(test remember-me-survives-session-expiry
+  (multiple-value-bind (r a) (fresh-repo-with-tokens)
+    (unwind-protect
+         (let* ((user (seed-user r "rm@x" "hunter22"))
+                (store (clug:make-memory-store))
+                ;; first request: log in with remember-me set
+                (login-app
+                  (clug:with-session
+                    (clug:to-clack-app
+                     (lambda (c)
+                       (clauth:login-with-remember-me c user r 'auth-token
+                                                      :secure nil)))
+                    :store store))
+                (login-resp (funcall login-app (env-with-cookie nil)))
+                (rm-cookie
+                  (loop for (k v) on (second login-resp) by #'cddr
+                        when (and (stringp k) (string= k "set-cookie")
+                                  (search clauth:*remember-me-cookie-key* v))
+                        return v))
+                ;; now the session is gone (different store) but the
+                ;; remember-me cookie should re-load the user
+                (fresh-store (clug:make-memory-store))
+                (load-app
+                  (clug:with-session
+                    (clug:to-clack-app
+                     (clug:pipeline
+                      (clauth:load-current-user-or-remember-me
+                       r :user-schema 'u :token-schema 'auth-token)
+                      (lambda (c)
+                        (clug:put-resp c 200
+                                       (if (clauth:current-user c)
+                                           "alive" "anon")))))
+                    :store fresh-store))
+                (rm-value (let* ((eq (position #\= rm-cookie))
+                                 (semi (position #\; rm-cookie)))
+                            (subseq rm-cookie (1+ eq) semi)))
+                (response (funcall load-app
+                                   (env-with-cookie
+                                    (format nil "~a=~a"
+                                            clauth:*remember-me-cookie-key*
+                                            rm-value)))))
+           (is (equal "alive" (first (third response)))))
+      (clecto:sqlite-close a))))
+
+(test logout-with-repo-revokes-remember-me
+  ;; Audit H1: bare logout used to leave the remember-me row + cookie
+  ;; intact, silently re-logging the user in on the next request.
+  ;; logout now accepts :repo / :token-schema and revokes both.
+  (multiple-value-bind (r a) (fresh-repo-with-tokens)
+    (unwind-protect
+         (let* ((user (seed-user r "lwo@x" "hunter22"))
+                (raw  (nth-value 0 (clauth:create-token r 'auth-token user
+                                                        :context clauth:*remember-me-context*))))
+           ;; simulate a request carrying the remember-me cookie
+           (let* ((conn (clug:make-conn
+                         :req (list :headers
+                                    (let ((h (make-hash-table :test 'equal)))
+                                      (setf (gethash "cookie" h)
+                                            (format nil "~a=~a"
+                                                    clauth:*remember-me-cookie-key*
+                                                    raw))
+                                      h)
+                                    :clug.session-state (list :sid nil
+                                                              :dirty nil
+                                                              :destroy nil
+                                                              :rotate nil
+                                                              :original-sid nil)
+                                    :clug.session (make-hash-table :test 'equal)))))
+             (clauth:logout conn :repo r :token-schema 'auth-token)
+             ;; row purged
+             (is (null (clauth:find-and-validate-token
+                        r 'auth-token raw
+                        :context clauth:*remember-me-context*)))))
+      (clecto:sqlite-close a))))
+
+(test credentials-changed-event-fires
+  ;; Audit H2: telemetry catalog listed :credentials-changed but no
+  ;; clauth code path ever fired it. bump-session-version now emits.
+  (let* ((events nil)
+         (clauth:*auth-telemetry* (lambda (e p) (push (list e p) events))))
+    (multiple-value-bind (r a) (fresh-repo)
+      (unwind-protect
+           (let* ((user (seed-user r "cc@x" "hunter22")))
+             (clecto:repo-update r (clauth:change-password-changeset
+                                    (list* :__schema__ 'u user)
+                                    '(:current-password "hunter22"
+                                      :password "fresh-pw-99"
+                                      :password-confirmation "fresh-pw-99")))
+             (is (some (lambda (e) (eq :credentials-changed (first e)))
+                       events)))
+        (clecto:sqlite-close a)))))
+
+(test remember-me-rejects-stale-session-version
+  ;; Same remember-me, but the user changed their password in between.
+  ;; The cookie's stamped version is now below the user's stored value
+  ;; → the plug ignores it and even revokes the row.
+  (multiple-value-bind (r a) (fresh-repo-with-tokens)
+    (unwind-protect
+         (let* ((user (seed-user r "rm2@x" "hunter22"))
+                (raw  (nth-value 0 (clauth:create-token r 'auth-token user
+                                                        :context clauth:*remember-me-context*))))
+           ;; user changes password → session-version bumps
+           (clecto:repo-update r (clauth:change-password-changeset
+                                  (list* :__schema__ 'u user)
+                                  '(:current-password "hunter22"
+                                    :password "fresh-pw-123"
+                                    :password-confirmation "fresh-pw-123")))
+           (let* ((app (clug:with-session
+                         (clug:to-clack-app
+                          (clug:pipeline
+                           (clauth:load-current-user-or-remember-me
+                            r :user-schema 'u :token-schema 'auth-token)
+                           (lambda (c)
+                             (clug:put-resp c 200
+                                            (if (clauth:current-user c)
+                                                "alive" "anon")))))
+                         :store (clug:make-memory-store)))
+                  (response (funcall app
+                                     (env-with-cookie
+                                      (format nil "~a=~a"
+                                              clauth:*remember-me-cookie-key*
+                                              raw)))))
+             (is (equal "anon" (first (third response))))
+             ;; token row was purged
+             (is (null (clauth:find-and-validate-token r 'auth-token raw
+                                                       :context clauth:*remember-me-context*)))))
+      (clecto:sqlite-close a))))
+
 (test require-role-uses-equal-no-coercion
   ;; Documenting design: role comparison is EQUAL, so "admin" (string)
   ;; does NOT match :admin (keyword). Apps choose one shape and stick

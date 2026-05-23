@@ -32,11 +32,24 @@
    #:load-current-user #:current-user #:require-auth #:require-role
    #:session-timeout)
 
+  ;; --- telemetry ---
+  (:export
+   #:*auth-telemetry* #:emit-auth-event #:auth-event-fields)
+
   ;; --- API tokens ---
   (:export
    #:auth-token-fields
    #:create-token #:find-and-validate-token
    #:revoke-token #:revoke-all-tokens-for-user
    #:revoke-tokens-on-credential-change
+   #:logout-all-sessions
    #:load-current-user-from-bearer
-   #:*default-api-token-ttl-seconds*))
+   #:*default-api-token-ttl-seconds*)
+
+  ;; --- remember-me ---
+  (:export
+   #:login-with-remember-me
+   #:clear-remember-me-cookie #:revoke-remember-me
+   #:load-current-user-or-remember-me
+   #:*remember-me-cookie-key* #:*remember-me-ttl-seconds*
+   #:*remember-me-context*))

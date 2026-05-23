@@ -38,11 +38,26 @@ level."
     (let ((conn (clug:put-session-value conn *session-user-key* id)))
       (when version
         (setf conn (clug:put-session-value conn *session-version-key* version)))
-      (clug:rotate-session-id conn))))
+      (let ((out (clug:rotate-session-id conn)))
+        (emit-auth-event :login (list :user-id id))
+        out))))
 
-(defun logout (conn)
-  "Clear the session (and its server-side store entry)."
-  (clug:clear-session conn))
+(defun logout (conn &key repo token-schema)
+  "Clear the session. When REPO and TOKEN-SCHEMA are supplied, ALSO
+revoke the remember-me cookie + its DB row — pass them whenever the
+app wires up remember-me, otherwise the user clicks 'sign out' and
+gets silently re-logged-in on the next request from their stored
+remember-me token. Bare (logout conn) is fine when remember-me is
+not in use."
+  (let ((id (current-user-id conn)))
+    (emit-auth-event :logout (list :user-id id))
+    (let ((c (clug:clear-session conn)))
+      ;; revoke-remember-me lives in remember-me.lisp (loaded after this
+      ;; file); funcall avoids a compile-time undefined-function warning
+      ;; while still resolving at load time when the symbol is defined.
+      (if (and repo token-schema)
+          (funcall (symbol-function 'revoke-remember-me) c repo token-schema)
+          c))))
 
 (defun current-user-id (conn)
   "Read the logged-in user's id from the session, or NIL. Returns NIL if

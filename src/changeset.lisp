@@ -110,7 +110,12 @@ Stops accidental no-op writes from cycling through the audit log later."
   "Cross-device session invalidation: increment :session-version so any
 other device's cookie (which recorded the OLD version at login time)
 is forcibly logged out on its next request. Call from any flow that
-changes credentials (password, email)."
+changes credentials (password, email).
+
+Fires the :credentials-changed audit event with the user id so apps
+wiring *auth-telemetry* see every credential rotation."
+  (emit-auth-event :credentials-changed
+                   (list :user-id (getf data :id)))
   (clecto:put-change cs :session-version
                      (1+ (or (getf data :session-version) 0))))
 

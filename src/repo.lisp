@@ -89,21 +89,31 @@ constant-rate request handling at the controller layer."
     (cond
       ((null user)
        (verify-password password (ensure-dummy-hash!))
+       (emit-auth-event :auth-failure (list :email email :reason :no-user))
        (values nil :wrong-password))
       ((account-locked-p user)
-       ;; Burn a verify so a locked account is indistinguishable from a
-       ;; non-locked one in timing — caller still gets :locked.
        (verify-password password (or stored (ensure-dummy-hash!)))
+       (emit-auth-event :auth-locked
+                        (list :user-id (getf user :id) :email email))
        (values nil :locked))
       ((null stored)
        (verify-password password (ensure-dummy-hash!))
+       (emit-auth-event :auth-failure
+                        (list :email email :reason :no-password-hash))
        (values nil :wrong-password))
       ((verify-password password stored)
        (reset-failed-attempts! repo schema-name user)
+       (emit-auth-event :auth-success (list :user-id (getf user :id)))
        (values user nil))
       (t
        (record-failed-attempt! repo schema-name user
                                max-attempts lockout-seconds)
+       (let ((count (1+ (or (getf user :failed-login-count) 0))))
+         (emit-auth-event
+          (if (>= count max-attempts) :account-locked :auth-failure)
+          (list :user-id (getf user :id)
+                :email email
+                :reason :wrong-password)))
        (values nil :wrong-password)))))
 
 (defun reset-failed-attempts! (repo schema-name user)

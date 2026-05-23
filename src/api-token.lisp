@@ -64,6 +64,8 @@ is in seconds; pass NIL for a non-expiring token (use sparingly)."
     (multiple-value-bind (record err) (clecto:repo-insert repo cs)
       (when err (error "create-token: insert failed: ~a"
                        (clecto:cs-errors err)))
+      (emit-auth-event :token-created
+                       (list :user-id user-id :context context))
       (values raw record))))
 
 (defun find-and-validate-token (repo token-schema raw-token
@@ -108,6 +110,36 @@ The session-version check in LOAD-CURRENT-USER-FROM-BEARER already
 makes existing tokens invalid; this helper purges the now-dead rows
 so they don't accumulate in the DB."
   (revoke-all-tokens-for-user repo token-schema user-id))
+
+(defun logout-all-sessions (repo user-schema token-schema user-id)
+  "Force EVERY device this user is signed in on to log out on its next
+request. Implementation:
+  - bump :session-version on the user row (the version stamped on
+    every existing cookie / bearer token now compares stale)
+  - purge bearer/remember-me tokens from the DB so they stop taking
+    up space
+
+Use cases: 'log me out everywhere' button, panic 'my account was
+hacked', admin-forced logout.
+
+NOTE: the CALLING session is not killed — the conn handling this
+request still sees the (now-stale) :session-version on its in-memory
+session data. The next request from this user's browser will see the
+bumped value and load-current-user will logout. Render a 'you've been
+signed out everywhere — sign in again' page directly; the user will
+hit re-login on their next action."
+  (let* ((schema (clecto::find-schema user-schema))
+         (table  (clecto::intern-table schema)))
+    (clecto:repo-update-all
+     repo
+     (clecto:where (clecto:from table) (list '= :id user-id))
+     (list :session-version
+           (list :fragment "\"session_version\" + 1")))
+    (revoke-all-tokens-for-user repo token-schema user-id)
+    ;; "all" as a string for consistency with other :context values
+    ;; ("api", "remember-me", "reset-password") that sinks see.
+    (emit-auth-event :token-revoked (list :user-id user-id :context "all"))
+    t))
 
 (defun revoke-all-tokens-for-user (repo token-schema user-id
                                    &key (context nil context-supplied-p))
