@@ -62,4 +62,16 @@
    #:clear-remember-me-cookie #:revoke-remember-me
    #:load-current-user-or-remember-me
    #:*remember-me-cookie-key* #:*remember-me-ttl-seconds*
-   #:*remember-me-context*))
+   #:*remember-me-context*)
+
+  ;; --- clauth/mail (loaded by clauth/mail ASD system) ---
+  (:export
+   #:*from-address*
+   #:*confirmation-context* #:*confirmation-validity-seconds*
+   #:*reset-password-context* #:*reset-password-validity-seconds*
+   #:*magic-link-context* #:*magic-link-validity-seconds*
+   #:*change-email-context-prefix* #:*change-email-validity-seconds*
+   #:deliver-confirmation-instructions #:confirm-user!
+   #:deliver-reset-instructions       #:reset-password!
+   #:deliver-change-email-instructions #:apply-email-change!
+   #:deliver-magic-link                #:log-in-by-magic-link!))

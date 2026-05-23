@@ -1235,6 +1235,234 @@ echos the current user id (or 'anon')."
            (is (null (clauth:find-and-validate-token r 'auth-token raw))))
       (clecto:sqlite-close a))))
 
+;;; --- clauth/mail: confirmation / reset / change-email / magic-link ---
+
+(defparameter *test-mailer* nil)
+
+(defun mail-test-setup ()
+  (setf *test-mailer* (cliam:make-test-adapter))
+  (setf clauth:*from-address* '("Test" . "noreply@test.local")))
+
+(defun mail-test-cleanup ()
+  (cliam:clear-inbox *test-mailer*))
+
+(test confirmation-flow
+  (mail-test-setup)
+  (multiple-value-bind (r a) (fresh-repo-with-tokens)
+    (unwind-protect
+         (let* ((user (seed-user r "conf@x" "hunter22-extra"))
+                (raw  (clauth:deliver-confirmation-instructions
+                       :repo r :token-schema 'auth-token :user user
+                       :url-builder (lambda (t_) (format nil "https://app/confirm/~a" t_))
+                       :mailer *test-mailer*)))
+           (is (= 1 (length (cliam:test-inbox *test-mailer*))))
+           ;; the address ended up on the To list (string or (name . addr))
+           (let* ((to (cliam:email-to (first (cliam:test-inbox *test-mailer*))))
+                  (addrs (mapcar (lambda (r) (if (consp r) (cdr r) r)) to)))
+             (is (find "conf@x" addrs :test #'equal)))
+           ;; confirm
+           (multiple-value-bind (u err) (clauth:confirm-user!
+                                          :repo r :user-schema 'u
+                                          :token-schema 'auth-token
+                                          :raw-token raw)
+             (is (null err))
+             (is (not (null (getf u :confirmed-at)))))
+           ;; second attempt fails (token deleted)
+           (multiple-value-bind (u err) (clauth:confirm-user!
+                                          :repo r :user-schema 'u
+                                          :token-schema 'auth-token
+                                          :raw-token raw)
+             (is (null u))
+             (is (eq :invalid err))))
+      (mail-test-cleanup)
+      (clecto:sqlite-close a))))
+
+(test reset-password-flow
+  (mail-test-setup)
+  (multiple-value-bind (r a) (fresh-repo-with-tokens)
+    (unwind-protect
+         (let* ((user (seed-user r "rp@x" "hunter22-extra"))
+                (raw  (clauth:deliver-reset-instructions
+                       :repo r :token-schema 'auth-token :user user
+                       :url-builder (lambda (t_) (format nil "https://app/reset/~a" t_))
+                       :mailer *test-mailer*)))
+           (is (= 1 (length (cliam:test-inbox *test-mailer*))))
+           ;; reset with new password
+           (multiple-value-bind (u err) (clauth:reset-password!
+                                          :repo r :user-schema 'u
+                                          :token-schema 'auth-token
+                                          :raw-token raw
+                                          :attrs '(:password "new-pw-12345"
+                                                   :password-confirmation "new-pw-12345"))
+             (declare (ignore u))
+             (is (null err)))
+           ;; old password no longer works
+           (is (null (clauth:authenticate r 'u "rp@x" "hunter22-extra")))
+           ;; new one does
+           (is (not (null (clauth:authenticate r 'u "rp@x" "new-pw-12345"))))
+           ;; token consumed
+           (multiple-value-bind (u err) (clauth:reset-password!
+                                          :repo r :user-schema 'u
+                                          :token-schema 'auth-token
+                                          :raw-token raw
+                                          :attrs '(:password "another-pw-99"
+                                                   :password-confirmation "another-pw-99"))
+             (is (null u))
+             (is (eq :invalid err))))
+      (mail-test-cleanup)
+      (clecto:sqlite-close a))))
+
+(test reset-password-rejects-invalid-changeset
+  (mail-test-setup)
+  (multiple-value-bind (r a) (fresh-repo-with-tokens)
+    (unwind-protect
+         (let* ((user (seed-user r "rpi@x" "hunter22-extra"))
+                (raw  (clauth:deliver-reset-instructions
+                       :repo r :token-schema 'auth-token :user user
+                       :url-builder (lambda (t_) (format nil "/x/~a" t_))
+                       :mailer *test-mailer*)))
+           (multiple-value-bind (u err) (clauth:reset-password!
+                                          :repo r :user-schema 'u
+                                          :token-schema 'auth-token
+                                          :raw-token raw
+                                          :attrs '(:password "short"
+                                                   :password-confirmation "short"))
+             (is (null u))
+             (is (clecto:changeset-p err))))
+      (mail-test-cleanup)
+      (clecto:sqlite-close a))))
+
+(test change-email-flow
+  (mail-test-setup)
+  (multiple-value-bind (r a) (fresh-repo-with-tokens)
+    (unwind-protect
+         (let* ((user (seed-user r "old@x" "hunter22-extra"))
+                (raw  (clauth:deliver-change-email-instructions
+                       :repo r :token-schema 'auth-token :user user
+                       :new-email "new@x.com"
+                       :url-builder (lambda (t_) (format nil "/ce/~a" t_))
+                       :mailer *test-mailer*)))
+           ;; email was sent to the NEW address, not the old one
+           (let ((to (cliam:email-to
+                      (first (cliam:test-inbox *test-mailer*)))))
+             (is (search "new@x.com" (if (consp (car to))
+                                         (cdr (car to))
+                                         (car to)))))
+           (multiple-value-bind (u err) (clauth:apply-email-change!
+                                          :repo r :user-schema 'u
+                                          :token-schema 'auth-token
+                                          :raw-token raw)
+             (is (null err))
+             (is (equal "new@x.com" (getf u :email))))
+           ;; authenticating with the new email works
+           (is (not (null (clauth:authenticate r 'u "new@x.com" "hunter22-extra")))))
+      (mail-test-cleanup)
+      (clecto:sqlite-close a))))
+
+(test change-email-rejects-malformed-new-email
+  (signals error
+    (clauth:deliver-change-email-instructions
+     :repo nil :token-schema nil :user nil
+     :new-email "no-at-sign"
+     :url-builder (lambda (t_) t_) :mailer nil)))
+
+(test magic-link-flow
+  (mail-test-setup)
+  (multiple-value-bind (r a) (fresh-repo-with-tokens)
+    (unwind-protect
+         (let* ((user (seed-user r "ml@x" "hunter22-extra"))
+                (raw  (clauth:deliver-magic-link
+                       :repo r :token-schema 'auth-token :user user
+                       :url-builder (lambda (t_) (format nil "/m/~a" t_))
+                       :mailer *test-mailer*)))
+           (multiple-value-bind (u err) (clauth:log-in-by-magic-link!
+                                          :repo r :user-schema 'u
+                                          :token-schema 'auth-token
+                                          :raw-token raw)
+             (is (null err))
+             (is (= (getf user :id) (getf u :id))))
+           ;; single-use: a second call fails
+           (multiple-value-bind (u err) (clauth:log-in-by-magic-link!
+                                          :repo r :user-schema 'u
+                                          :token-schema 'auth-token
+                                          :raw-token raw)
+             (is (null u))
+             (is (eq :invalid err))))
+      (mail-test-cleanup)
+      (clecto:sqlite-close a))))
+
+;;; --- mail audit follow-ups ---
+
+(test confirmation-rejects-token-after-email-rotation
+  ;; H3: token issued to OLD email must not confirm NEW email.
+  (mail-test-setup)
+  (multiple-value-bind (r a) (fresh-repo-with-tokens)
+    (unwind-protect
+         (let* ((user (seed-user r "rot@x" "hunter22-extra"))
+                (raw (clauth:deliver-confirmation-instructions
+                      :repo r :token-schema 'auth-token :user user
+                      :url-builder (lambda (t_) (format nil "/c/~a" t_))
+                      :mailer *test-mailer*))
+                ;; admin rotates the email out-of-band
+                (user-tbl (clecto::intern-table (clecto::find-schema 'u))))
+           (clecto:repo-update-all
+            r (clecto:where (clecto:from user-tbl)
+                            (list '= :id (getf user :id)))
+            (list :email "different@x"))
+           (multiple-value-bind (u err) (clauth:confirm-user!
+                                          :repo r :user-schema 'u
+                                          :token-schema 'auth-token
+                                          :raw-token raw)
+             (is (null u))
+             (is (eq :invalid err))))
+      (mail-test-cleanup)
+      (clecto:sqlite-close a))))
+
+(test magic-link-rejects-token-after-email-rotation
+  (mail-test-setup)
+  (multiple-value-bind (r a) (fresh-repo-with-tokens)
+    (unwind-protect
+         (let* ((user (seed-user r "mlr@x" "hunter22-extra"))
+                (raw (clauth:deliver-magic-link
+                      :repo r :token-schema 'auth-token :user user
+                      :url-builder (lambda (t_) (format nil "/m/~a" t_))
+                      :mailer *test-mailer*))
+                (user-tbl (clecto::intern-table (clecto::find-schema 'u))))
+           (clecto:repo-update-all
+            r (clecto:where (clecto:from user-tbl)
+                            (list '= :id (getf user :id)))
+            (list :email "moved@x"))
+           (multiple-value-bind (u err) (clauth:log-in-by-magic-link!
+                                          :repo r :user-schema 'u
+                                          :token-schema 'auth-token
+                                          :raw-token raw)
+             (is (null u))
+             (is (eq :invalid err))))
+      (mail-test-cleanup)
+      (clecto:sqlite-close a))))
+
+(test apply-email-change-collision-returns-email-taken
+  (mail-test-setup)
+  (multiple-value-bind (r a) (fresh-repo-with-tokens)
+    (unwind-protect
+         (let* ((alice (seed-user r "alice@x" "hunter22-extra"))
+                (_     (seed-user r "bob@x"   "hunter22-extra"))
+                ;; alice tries to change her email to bob@x
+                (raw (clauth:deliver-change-email-instructions
+                      :repo r :token-schema 'auth-token :user alice
+                      :new-email "bob@x"
+                      :url-builder (lambda (t_) (format nil "/ce/~a" t_))
+                      :mailer *test-mailer*)))
+           (declare (ignore _))
+           (multiple-value-bind (u err) (clauth:apply-email-change!
+                                          :repo r :user-schema 'u
+                                          :token-schema 'auth-token
+                                          :raw-token raw)
+             (is (null u))
+             (is (eq :email-taken err))))
+      (mail-test-cleanup)
+      (clecto:sqlite-close a))))
+
 (test require-role-uses-equal-no-coercion
   ;; Documenting design: role comparison is EQUAL, so "admin" (string)
   ;; does NOT match :admin (keyword). Apps choose one shape and stick

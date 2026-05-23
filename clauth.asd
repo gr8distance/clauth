@@ -19,8 +19,17 @@
                (:file "remember-me" :depends-on ("api-token" "plug")))
   :in-order-to ((test-op (test-op "clauth/tests"))))
 
+(defsystem "clauth/mail"
+  :description "Mail-driven auth flows on top of clauth + cliam."
+  :version "0.1.0"
+  :author "ug <gr8.distance@gmail.com>"
+  :license "MIT"
+  :depends-on ("clauth" "cliam")
+  :pathname "src/"
+  :components ((:file "mail")))
+
 (defsystem "clauth/tests"
-  :depends-on ("clauth" "fiveam")
+  :depends-on ("clauth" "clauth/mail" "fiveam")
   :pathname "tests/"
   :components ((:file "main"))
   :perform (test-op (op c) (symbol-call :fiveam :run! :clauth)))
