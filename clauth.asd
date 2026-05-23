@@ -13,7 +13,8 @@
                (:file "schema"    :depends-on ("package"))
                (:file "changeset" :depends-on ("util" "password" "schema"))
                (:file "repo"      :depends-on ("password"))
-               (:file "plug"      :depends-on ("repo")))
+               (:file "plug"      :depends-on ("repo"))
+               (:file "api-token" :depends-on ("token" "plug")))
   :in-order-to ((test-op (test-op "clauth/tests"))))
 
 (defsystem "clauth/tests"

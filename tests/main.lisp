@@ -68,6 +68,8 @@
   (:password-hash :string)
   (:confirmed-at  :naive-datetime)
   (:session-version :integer)
+  (:failed-login-count :integer)
+  (:locked-until :naive-datetime)
   (:password              :string :virtual t)
   (:password-confirmation :string :virtual t)
   (:current-password      :string :virtual t)
@@ -80,6 +82,8 @@
      "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT UNIQUE,
                           password_hash TEXT, confirmed_at TEXT,
                           session_version INTEGER DEFAULT 0,
+                          failed_login_count INTEGER DEFAULT 0,
+                          locked_until TEXT,
                           inserted_at TEXT, updated_at TEXT)")
     (values r a)))
 
@@ -632,6 +636,275 @@ echos the current user id (or 'anon')."
   ;; A bare conn (no clug:with-session wrapping) should not error;
   ;; current-user-id returns NIL.
   (is (null (clauth:current-user-id (clug:make-conn)))))
+
+;;; --- B1: account lockout ---
+
+(defun seed-user (r email pw)
+  (nth-value 0 (clecto:repo-insert
+                r (clauth:register-changeset
+                   'u (list :email email :password pw
+                            :password-confirmation pw)))))
+
+(test lockout-locks-after-threshold
+  (multiple-value-bind (r a) (fresh-repo)
+    (unwind-protect
+         (progn
+           (seed-user r "lk@x" "hunter22")
+           ;; 5 wrong attempts (default threshold)
+           (dotimes (n 5)
+             (multiple-value-bind (user reason)
+                 (clauth:authenticate-with-lockout r 'u "lk@x" "wrong")
+               (is (null user))
+               (is (eq :wrong-password reason))))
+           ;; 6th — still wrong, but now :locked
+           (multiple-value-bind (user reason)
+               (clauth:authenticate-with-lockout r 'u "lk@x" "wrong")
+             (is (null user))
+             (is (eq :locked reason)))
+           ;; even the RIGHT password returns :locked while the lock holds
+           (multiple-value-bind (user reason)
+               (clauth:authenticate-with-lockout r 'u "lk@x" "hunter22")
+             (is (null user))
+             (is (eq :locked reason))))
+      (clecto:sqlite-close a))))
+
+(test lockout-resets-on-successful-auth
+  (multiple-value-bind (r a) (fresh-repo)
+    (unwind-protect
+         (progn
+           (seed-user r "lk2@x" "hunter22")
+           ;; rack up 3 fails (below threshold of 5)
+           (dotimes (n 3)
+             (clauth:authenticate-with-lockout r 'u "lk2@x" "wrong"))
+           (let ((u (clecto:repo-get-by r 'u '(:email "lk2@x"))))
+             (is (= 3 (getf u :failed-login-count))))
+           ;; success resets the counter
+           (multiple-value-bind (user reason)
+               (clauth:authenticate-with-lockout r 'u "lk2@x" "hunter22")
+             (is (not (null user)))
+             (is (null reason)))
+           (let ((u (clecto:repo-get-by r 'u '(:email "lk2@x"))))
+             (is (zerop (getf u :failed-login-count)))
+             (is (null (getf u :locked-until)))))
+      (clecto:sqlite-close a))))
+
+(test lockout-missing-user-returns-wrong-password
+  (multiple-value-bind (r a) (fresh-repo)
+    (unwind-protect
+         (multiple-value-bind (user reason)
+             (clauth:authenticate-with-lockout r 'u "ghost@x" "anything")
+           (is (null user))
+           (is (eq :wrong-password reason)))
+      (clecto:sqlite-close a))))
+
+(test lockout-respects-custom-thresholds
+  (multiple-value-bind (r a) (fresh-repo)
+    (unwind-protect
+         (progn
+           (seed-user r "lk3@x" "hunter22")
+           ;; threshold of 2, very short window
+           (clauth:authenticate-with-lockout r 'u "lk3@x" "wrong"
+                                             :max-attempts 2)
+           (clauth:authenticate-with-lockout r 'u "lk3@x" "wrong"
+                                             :max-attempts 2)
+           (multiple-value-bind (user reason)
+               (clauth:authenticate-with-lockout r 'u "lk3@x" "wrong"
+                                                 :max-attempts 2)
+             (is (null user))
+             (is (eq :locked reason))))
+      (clecto:sqlite-close a))))
+
+;;; --- B2: API tokens ---
+
+(clecto:defschema auth-token "auth_tokens"
+  (:id         :integer :primary-key t)
+  (:user-id    :integer)
+  (:token-hash :string)
+  (:context    :string)
+  (:session-version :integer)
+  (:expires-at :naive-datetime)
+  (:timestamps))
+
+(defun fresh-repo-with-tokens ()
+  (multiple-value-bind (r a) (fresh-repo)
+    (clecto:repo-execute r
+     "CREATE TABLE auth_tokens (id INTEGER PRIMARY KEY,
+                                user_id INTEGER,
+                                token_hash TEXT UNIQUE,
+                                context TEXT,
+                                session_version INTEGER DEFAULT 0,
+                                expires_at TEXT,
+                                inserted_at TEXT, updated_at TEXT)")
+    (values r a)))
+
+(test api-token-mint-and-validate
+  (multiple-value-bind (r a) (fresh-repo-with-tokens)
+    (unwind-protect
+         (let* ((user (seed-user r "t@x" "hunter22"))
+                (uid (getf user :id)))
+           (multiple-value-bind (raw record)
+               (clauth:create-token r 'auth-token user)
+             (is (stringp raw))
+             (is (= 64 (length raw)))
+             (is (not (search raw (or (getf record :token-hash) ""))))
+             ;; finding by the raw token returns the row
+             (let ((found (clauth:find-and-validate-token r 'auth-token raw)))
+               (is (not (null found)))
+               (is (= uid (getf found :user-id))))
+             ;; a different token doesn't match
+             (is (null (clauth:find-and-validate-token r 'auth-token
+                                                       "deadbeefxxxx")))))
+      (clecto:sqlite-close a))))
+
+(test api-token-respects-context
+  (multiple-value-bind (r a) (fresh-repo-with-tokens)
+    (unwind-protect
+         (let* ((user (seed-user r "t2@x" "hunter22"))
+                (uid (getf user :id))
+                (raw (nth-value 0 (clauth:create-token r 'auth-token user
+                                                       :context "api"))))
+           ;; same token, wrong context
+           (is (null (clauth:find-and-validate-token
+                      r 'auth-token raw :context "remember-me")))
+           ;; right context
+           (is (not (null (clauth:find-and-validate-token
+                           r 'auth-token raw :context "api")))))
+      (clecto:sqlite-close a))))
+
+(test api-token-expiry
+  (multiple-value-bind (r a) (fresh-repo-with-tokens)
+    (unwind-protect
+         (let* ((user (seed-user r "t3@x" "hunter22"))
+                (uid (getf user :id))
+                ;; already-expired token
+                (raw (nth-value 0 (clauth:create-token r 'auth-token user
+                                                       :expires-in -10))))
+           (is (null (clauth:find-and-validate-token r 'auth-token raw))))
+      (clecto:sqlite-close a))))
+
+(test api-token-revoke
+  (multiple-value-bind (r a) (fresh-repo-with-tokens)
+    (unwind-protect
+         (let* ((user (seed-user r "t4@x" "hunter22"))
+                (uid (getf user :id))
+                (raw nil)
+                (rec nil))
+           (multiple-value-bind (r1 rec1)
+               (clauth:create-token r 'auth-token user)
+             (setf raw r1 rec rec1))
+           (clauth:revoke-token r 'auth-token (getf rec :id))
+           (is (null (clauth:find-and-validate-token r 'auth-token raw))))
+      (clecto:sqlite-close a))))
+
+(test api-token-revoke-all-by-context
+  (multiple-value-bind (r a) (fresh-repo-with-tokens)
+    (unwind-protect
+         (let* ((user (seed-user r "t5@x" "hunter22"))
+                (uid (getf user :id))
+                (api-raw (nth-value 0 (clauth:create-token r 'auth-token user
+                                                           :context "api")))
+                (rm-raw  (nth-value 0 (clauth:create-token r 'auth-token user
+                                                           :context "remember-me"))))
+           (clauth:revoke-all-tokens-for-user r 'auth-token uid :context "api")
+           (is (null (clauth:find-and-validate-token r 'auth-token api-raw)))
+           ;; remember-me survived
+           (is (not (null (clauth:find-and-validate-token r 'auth-token rm-raw
+                                                          :context "remember-me")))))
+      (clecto:sqlite-close a))))
+
+(test bearer-plug-loads-user
+  (multiple-value-bind (r a) (fresh-repo-with-tokens)
+    (unwind-protect
+         (let* ((user (seed-user r "b@x" "hunter22"))
+                (uid (getf user :id))
+                (raw (nth-value 0 (clauth:create-token r 'auth-token user))))
+           (let* ((plug (clauth:load-current-user-from-bearer
+                         r :user-schema 'u :token-schema 'auth-token))
+                  (conn (clug:make-conn
+                         :req (list :headers
+                                    (let ((h (make-hash-table :test 'equal)))
+                                      (setf (gethash "authorization" h)
+                                            (format nil "Bearer ~a" raw))
+                                      h))))
+                  (out (funcall plug conn)))
+             (is (not (null (clauth:current-user out))))
+             (is (= uid (getf (clauth:current-user out) :id))))
+           ;; missing / malformed bearer is a no-op (no current-user set)
+           (let ((out (funcall (clauth:load-current-user-from-bearer
+                                r :user-schema 'u :token-schema 'auth-token)
+                               (clug:make-conn :req (list :headers
+                                                          (make-hash-table :test 'equal))))))
+             (is (null (clauth:current-user out)))))
+      (clecto:sqlite-close a))))
+
+(test bearer-plug-rejects-stale-session-version
+  ;; Phoenix-style: changing the password must instantly invalidate
+  ;; every existing API token. We do that by stamping the user's
+  ;; session-version on the token at mint and rejecting tokens whose
+  ;; stored value is below the user's current value.
+  (multiple-value-bind (r a) (fresh-repo-with-tokens)
+    (unwind-protect
+         (let* ((user (seed-user r "stale@x" "hunter22"))
+                (raw  (nth-value 0 (clauth:create-token r 'auth-token user))))
+           ;; bearer plug accepts the token initially
+           (let* ((plug (clauth:load-current-user-from-bearer
+                         r :user-schema 'u :token-schema 'auth-token))
+                  (conn (clug:make-conn
+                         :req (list :headers
+                                    (let ((h (make-hash-table :test 'equal)))
+                                      (setf (gethash "authorization" h)
+                                            (format nil "Bearer ~a" raw))
+                                      h)))))
+             (is (not (null (clauth:current-user (funcall plug conn))))))
+           ;; user changes password (bumps session-version)
+           (clecto:repo-update r (clauth:change-password-changeset
+                                  (list* :__schema__ 'u user)
+                                  '(:current-password "hunter22"
+                                    :password "fresh-secret-99"
+                                    :password-confirmation "fresh-secret-99")))
+           ;; same token, same plug, but now rejected
+           (let* ((plug (clauth:load-current-user-from-bearer
+                         r :user-schema 'u :token-schema 'auth-token))
+                  (conn (clug:make-conn
+                         :req (list :headers
+                                    (let ((h (make-hash-table :test 'equal)))
+                                      (setf (gethash "authorization" h)
+                                            (format nil "Bearer ~a" raw))
+                                      h)))))
+             (is (null (clauth:current-user (funcall plug conn))))))
+      (clecto:sqlite-close a))))
+
+(test revoke-tokens-on-credential-change-clears-store
+  (multiple-value-bind (r a) (fresh-repo-with-tokens)
+    (unwind-protect
+         (let* ((user (seed-user r "rev@x" "hunter22"))
+                (uid (getf user :id))
+                (raw (nth-value 0 (clauth:create-token r 'auth-token user))))
+           (clauth:revoke-tokens-on-credential-change r 'auth-token uid)
+           (is (null (clauth:find-and-validate-token r 'auth-token raw))))
+      (clecto:sqlite-close a))))
+
+(test bearer-plug-rejects-wrong-context
+  (multiple-value-bind (r a) (fresh-repo-with-tokens)
+    (unwind-protect
+         (let* ((user (seed-user r "b2@x" "hunter22"))
+                (uid (getf user :id))
+                ;; mint a remember-me token; bearer plug looking for :api
+                ;; must not accept it.
+                (raw (nth-value 0 (clauth:create-token r 'auth-token user
+                                                       :context "remember-me"))))
+           (let* ((plug (clauth:load-current-user-from-bearer
+                         r :user-schema 'u :token-schema 'auth-token
+                         :context "api"))
+                  (conn (clug:make-conn
+                         :req (list :headers
+                                    (let ((h (make-hash-table :test 'equal)))
+                                      (setf (gethash "authorization" h)
+                                            (format nil "Bearer ~a" raw))
+                                      h))))
+                  (out (funcall plug conn)))
+             (is (null (clauth:current-user out)))))
+      (clecto:sqlite-close a))))
 
 (test register-surfaces-unique-email-collision
   (multiple-value-bind (r a) (fresh-repo)

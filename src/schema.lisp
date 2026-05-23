@@ -26,6 +26,10 @@ session on its next request."
     (:password-hash         :string)
     (:confirmed-at          :naive-datetime)
     (:session-version       :integer)
+    ;; Lockout / rate-limit bookkeeping. Both nil-ok for users who
+    ;; have never failed a login.
+    (:failed-login-count    :integer)
+    (:locked-until          :naive-datetime)
     ;; Virtual: present on the changeset but never written to SQL.
     (:password              :string :virtual t)
     (:password-confirmation :string :virtual t)

@@ -21,10 +21,22 @@
 
   ;; --- repo ---
   (:export
-   #:authenticate)
+   #:authenticate
+   #:authenticate-with-lockout
+   #:account-locked-p
+   #:*lockout-max-attempts* #:*lockout-duration-seconds*)
 
   ;; --- conn / session integration ---
   (:export
    #:login #:logout #:current-user-id
    #:load-current-user #:current-user #:require-auth
-   #:session-timeout))
+   #:session-timeout)
+
+  ;; --- API tokens ---
+  (:export
+   #:auth-token-fields
+   #:create-token #:find-and-validate-token
+   #:revoke-token #:revoke-all-tokens-for-user
+   #:revoke-tokens-on-credential-change
+   #:load-current-user-from-bearer
+   #:*default-api-token-ttl-seconds*))
