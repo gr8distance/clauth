@@ -259,42 +259,10 @@ sessions but keep my remember-me cookie'."
     (clecto:repo-delete-all
      repo (clecto:where (clecto:from table) where))))
 
-;;; --- bearer plug ---
-
-(defun parse-bearer (header)
-  "Return the token portion of an Authorization: Bearer header, or NIL.
-Strips spaces, tabs, CR, LF so a quoted-printable header doesn't slip
-in a stray byte that turns a valid token into a non-match."
-  (when (and header
-             (>= (length header) 7)
-             (string-equal "Bearer " (subseq header 0 7)))
-    (string-trim '(#\Space #\Tab #\Return #\Newline)
-                 (subseq header 7))))
-
-(defun load-current-user-from-bearer (repo
-                                      &key user-schema token-schema
-                                           (context "api"))
-  "Plug: read the Authorization header, validate the bearer token, load
-the corresponding user, and attach it under *current-user-key*. No-op
-when the header is absent, the token is invalid, the user no longer
-exists, or the user's :session-version has advanced past the value
-stamped onto the token (credential change elsewhere invalidates the
-token). Pair with REQUIRE-AUTH downstream for the 401."
-  (lambda (conn)
-    (let* ((header (clug:get-req-header conn "authorization"))
-           (raw    (parse-bearer header))
-           (token  (and raw (find-and-validate-token
-                             repo token-schema raw :context context)))
-           (user   (and token (clecto:repo-get repo user-schema
-                                               (getf token :user-id)))))
-      (cond
-        ((or (null token) (null user)) conn)
-        (t (clug:assign conn *current-user-key* user))))))
-
-(defun token-session-version-stale-p (token user)
-  "DEPRECATED. The phx.gen.auth-style invalidation deletes token rows
-on credential change, so a 'stale version' branch is unreachable in
-the new world. Kept exported so old call sites compile; always returns
-NIL."
-  (declare (ignore token user))
-  nil)
+;;; HTTP API / bearer-token authentication is intentionally NOT
+;;; provided here. phx.gen.auth doesn't ship it, and the Phoenix
+;;; convention treats programmatic API auth as a separate concern
+;;; (Phoenix.Token in core, with libraries like Joken / Guardian for
+;;; richer cases). clauth's token primitives — CREATE-TOKEN,
+;;; FIND-AND-VALIDATE-TOKEN, REVOKE-TOKEN — are general enough that
+;;; a bearer plug, if needed, is ~10 lines of caller code.

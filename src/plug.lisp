@@ -18,10 +18,6 @@ requests). Mirrors phx.gen.auth's :user_token session key.")
 session token (under *session-token-key*) is the authoritative key.
 Kept so callers reading it through clug:get-session-value don't break.")
 
-(defvar *session-last-activity-key* :last-activity-at
-  "Session key under which SESSION-TIMEOUT records the last-seen
-universal-time. Stored as an integer.")
-
 (defvar *session-version-key* :session-version
   "Session key recording the user's session-version at the time of
 LOGIN. LOAD-CURRENT-USER compares it against the stored value on the
@@ -176,33 +172,11 @@ as 0 so legacy data stays compatible."
   "Retrieve the user record attached by LOAD-CURRENT-USER."
   (clug:get-assign conn *current-user-key*))
 
-(defun session-timeout (&key (max-idle-seconds 1800))
-  "Return a plug that logs the user out if more than MAX-IDLE-SECONDS
-have elapsed since the last seen activity timestamp on the session.
-Place AFTER WITH-SESSION but BEFORE LOAD-CURRENT-USER.
-
-Touches the session on every authenticated request (writes a fresh
-timestamp), which counts as 'dirty' and triggers a session save —
-keep MAX-IDLE-SECONDS coarse enough that the write rate is sane.
-
-CLOCK-SKEW NOTE: timestamps are based on each node's wall clock
-(GET-UNIVERSAL-TIME). A skew where one node's clock is BEHIND another
-would otherwise compute a negative delta and never expire — we clamp
-to (MAX 0 delta) so skewed time fails closed (forces re-auth) rather
-than open (kept alive forever)."
-  (lambda (conn)
-    (let ((authed-p (or (current-user-id conn) (current-session-token conn))))
-      (cond
-        ((null authed-p) conn)                       ; not logged in, no-op
-        (t
-         (let* ((last (clug:get-session-value
-                       conn *session-last-activity-key*))
-                (now  (get-universal-time))
-                (delta (and last (max 0 (- now last)))))
-           (cond
-             ((and delta (> delta max-idle-seconds)) (logout conn))
-             (t (clug:put-session-value
-                 conn *session-last-activity-key* now)))))))))
+;;; Idle-session-timeout plug was removed. phx.gen.auth doesn't ship
+;;; one; the recommended idiom is the session cookie's own max-age (set
+;;; via the session middleware's :max-age option). Callers who really
+;;; need an in-app idle timeout can read GET-UNIVERSAL-TIME stamps off
+;;; the session themselves — it's a 10-line plug.
 
 (defvar *session-return-to-key* :user-return-to
   "Session key under which REQUIRE-AUTH stashes the GET path the user

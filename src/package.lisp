@@ -34,7 +34,6 @@
    #:require-auth #:require-role #:redirect-if-authenticated
    #:log-in-and-redirect
    #:maybe-store-return-to #:*session-return-to-key*
-   #:session-timeout
    #:*session-token-key*)
 
   ;; --- telemetry ---
@@ -49,7 +48,6 @@
    #:revoke-tokens-on-credential-change
    #:update-password! #:update-email!
    #:logout-all-sessions
-   #:load-current-user-from-bearer
    #:*default-api-token-ttl-seconds*
    #:*session-context* #:*session-token-validity-seconds*
    #:*session-token-reissue-after-seconds*

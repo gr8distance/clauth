@@ -415,78 +415,6 @@ echos the current user id (or 'anon')."
            (is (assoc :email (clecto:cs-errors cs))))
       (clecto:sqlite-close a))))
 
-;;; --- A3: session-timeout ---
-
-(test session-timeout-logs-out-stale-session
-  (multiple-value-bind (r a) (fresh-repo)
-    (unwind-protect
-         (let* ((user (nth-value 0 (clecto:repo-insert
-                                    r (clauth:register-changeset
-                                       'u '(:email "st@x" :password "hunter22-extra"
-                                            :password-confirmation "hunter22-extra")))))
-                (uid (getf user :id))
-                (store (clug:make-memory-store))
-                (sid "stale-sid")
-                (long-ago (- (get-universal-time) 9999))
-                ;; pre-populate session: logged in, but last activity is old
-                (data (let ((h (make-hash-table :test 'equal)))
-                        (setf (gethash :user-id h) uid)
-                        (setf (gethash :last-activity-at h) long-ago)
-                        h))
-                (_ (clug:store-save store sid data))
-                (timeout-plug (clauth:session-timeout :max-idle-seconds 1800))
-                (app (clug:with-session
-                       (clug:to-clack-app
-                        (clug:pipeline
-                         timeout-plug
-                         (clauth:load-current-user r 'u)
-                         (lambda (c)
-                           (clug:put-resp c 200
-                                          (if (clauth:current-user c)
-                                              "alive" "expired")))))
-                       :store store))
-                (response (funcall app
-                                   (env-with-cookie (format nil "clug.session=~a" sid)))))
-           (declare (ignore _))
-           (is (equal "expired" (first (third response))))
-           (is (null (clug:store-load store sid))))
-      (clecto:sqlite-close a))))
-
-(test session-timeout-refreshes-activity-on-each-request
-  (multiple-value-bind (r a) (fresh-repo)
-    (unwind-protect
-         (let* ((user (nth-value 0 (clecto:repo-insert
-                                    r (clauth:register-changeset
-                                       'u '(:email "st2@x" :password "hunter22-extra"
-                                            :password-confirmation "hunter22-extra")))))
-                (uid (getf user :id))
-                (store (clug:make-memory-store))
-                (sid "fresh-sid")
-                (just-now (- (get-universal-time) 10))
-                (data (let ((h (make-hash-table :test 'equal)))
-                        (setf (gethash :user-id h) uid)
-                        (setf (gethash :last-activity-at h) just-now)
-                        h))
-                (_ (clug:store-save store sid data))
-                (app (clug:with-session
-                       (clug:to-clack-app
-                        (clug:pipeline
-                         (clauth:session-timeout :max-idle-seconds 1800)
-                         (clauth:load-current-user r 'u)
-                         (lambda (c)
-                           (clug:put-resp c 200
-                                          (if (clauth:current-user c)
-                                              "alive" "expired")))))
-                       :store store))
-                (response (funcall app
-                                   (env-with-cookie (format nil "clug.session=~a" sid)))))
-           (declare (ignore _))
-           (is (equal "alive" (first (third response))))
-           ;; timestamp was bumped
-           (let ((reloaded (clug:store-load store sid)))
-             (is (> (gethash :last-activity-at reloaded) just-now))))
-      (clecto:sqlite-close a))))
-
 ;;; --- A audit follow-ups (M2 / M3 / L1 / L3 / L4) ---
 
 (test virtual-current-password-never-reaches-sql-on-update
@@ -588,46 +516,6 @@ echos the current user id (or 'anon')."
              (is (assoc :email (clecto:cs-errors err)))))
       (clecto:sqlite-close a))))
 
-(test session-timeout-clamps-negative-skew
-  ;; Future-timestamp (clock skew) should NOT keep the user alive
-  ;; forever — we clamp delta to zero so timeout still fires when
-  ;; it should, and a skewed-future timestamp simply gets overwritten.
-  (multiple-value-bind (r a) (fresh-repo)
-    (unwind-protect
-         (let* ((user (nth-value 0 (clecto:repo-insert
-                                    r (clauth:register-changeset
-                                       'u '(:email "sk@x" :password "hunter22-extra"
-                                            :password-confirmation "hunter22-extra")))))
-                (uid (getf user :id))
-                (store (clug:make-memory-store))
-                (sid "skew-sid")
-                (future (+ (get-universal-time) 9999))
-                (data (let ((h (make-hash-table :test 'equal)))
-                        (setf (gethash :user-id h) uid)
-                        (setf (gethash :session-version h) 0)
-                        (setf (gethash :last-activity-at h) future)
-                        h))
-                (_ (clug:store-save store sid data))
-                (app (clug:with-session
-                       (clug:to-clack-app
-                        (clug:pipeline
-                         (clauth:session-timeout :max-idle-seconds 1800)
-                         (clauth:load-current-user r 'u)
-                         (lambda (c)
-                           (clug:put-resp c 200
-                                          (if (clauth:current-user c)
-                                              "alive" "expired")))))
-                       :store store))
-                (response (funcall app
-                                   (env-with-cookie (format nil "clug.session=~a" sid)))))
-           (declare (ignore _))
-           ;; alive (skew didn't expire) AND the future timestamp got
-           ;; overwritten with now
-           (is (equal "alive" (first (third response))))
-           (let ((reloaded (clug:store-load store sid)))
-             (is (<= (gethash :last-activity-at reloaded)
-                     (get-universal-time)))))
-      (clecto:sqlite-close a))))
 
 (test current-user-id-graceful-without-session-middleware
   ;; A bare conn (no clug:with-session wrapping) should not error;
@@ -826,31 +714,6 @@ echos the current user id (or 'anon')."
            ;; remember-me survived
            (is (not (null (clauth:find-and-validate-token r 'auth-token rm-raw
                                                           :context "remember-me")))))
-      (clecto:sqlite-close a))))
-
-(test bearer-plug-loads-user
-  (multiple-value-bind (r a) (fresh-repo-with-tokens)
-    (unwind-protect
-         (let* ((user (seed-user r "b@x" "hunter22-extra"))
-                (uid (getf user :id))
-                (raw (nth-value 0 (clauth:create-token r 'auth-token user))))
-           (let* ((plug (clauth:load-current-user-from-bearer
-                         r :user-schema 'u :token-schema 'auth-token))
-                  (conn (clug:make-conn
-                         :req (list :headers
-                                    (let ((h (make-hash-table :test 'equal)))
-                                      (setf (gethash "authorization" h)
-                                            (format nil "Bearer ~a" raw))
-                                      h))))
-                  (out (funcall plug conn)))
-             (is (not (null (clauth:current-user out))))
-             (is (= uid (getf (clauth:current-user out) :id))))
-           ;; missing / malformed bearer is a no-op (no current-user set)
-           (let ((out (funcall (clauth:load-current-user-from-bearer
-                                r :user-schema 'u :token-schema 'auth-token)
-                               (clug:make-conn :req (list :headers
-                                                          (make-hash-table :test 'equal))))))
-             (is (null (clauth:current-user out)))))
       (clecto:sqlite-close a))))
 
 ;;; --- C1: require-role ---
@@ -1200,41 +1063,6 @@ echos the current user id (or 'anon')."
     (funcall app env)
     (is (equal "/dashboard?tab=billing&sort=desc" captured))))
 
-(test session-timeout-fires-for-token-based-sessions
-  ;; H3 regression: under token-mode, current-user-id is nil so the
-  ;; OLD session-timeout short-circuited. Now it also checks the
-  ;; session-token cell.
-  (multiple-value-bind (r a) (fresh-repo-with-tokens)
-    (unwind-protect
-         (let* ((user (seed-user r "tt@x" "hunter22-extra"))
-                (raw (nth-value 0 (clauth:build-session-token r 'auth-token user)))
-                (store (clug:make-memory-store))
-                (sid "tok-sid")
-                (data (let ((h (make-hash-table :test 'equal)))
-                        (setf (gethash :user-token h) raw)
-                        (setf (gethash :last-activity-at h)
-                              (- (get-universal-time) 9999))
-                        h))
-                (_ (clug:store-save store sid data))
-                (app (clug:with-session
-                       (clug:to-clack-app
-                        (clug:pipeline
-                         (clauth:session-timeout :max-idle-seconds 1800)
-                         (clauth:load-current-user r 'u :token-schema 'auth-token)
-                         (lambda (c)
-                           (clug:put-resp c 200
-                                          (if (clauth:current-user c)
-                                              "alive" "expired")))))
-                       :store store))
-                (response (funcall app
-                                   (env-with-cookie (format nil "clug.session=~a" sid)))))
-           (declare (ignore _))
-           ;; session-timeout saw the token, decided "stale", called logout.
-           ;; Token row should be gone too.
-           (is (equal "expired" (first (third response))))
-           (is (null (clauth:find-and-validate-token r 'auth-token raw))))
-      (clecto:sqlite-close a))))
-
 ;;; --- clauth/mail: confirmation / reset / change-email / magic-link ---
 
 (defparameter *test-mailer* nil)
@@ -1472,38 +1300,6 @@ echos the current user id (or 'anon')."
     (is (clug:conn-halted-p out))
     (is (= 403 (clug:conn-status out)))))
 
-(test bearer-plug-rejected-after-password-change
-  ;; Phoenix-style: changing the password deletes every existing token,
-  ;; so the bearer plug can't find the row anymore.
-  (multiple-value-bind (r a) (fresh-repo-with-tokens)
-    (unwind-protect
-         (let* ((user (seed-user r "stale@x" "hunter22-extra"))
-                (raw  (nth-value 0 (clauth:create-token r 'auth-token user))))
-           (let* ((plug (clauth:load-current-user-from-bearer
-                         r :user-schema 'u :token-schema 'auth-token))
-                  (conn (clug:make-conn
-                         :req (list :headers
-                                    (let ((h (make-hash-table :test 'equal)))
-                                      (setf (gethash "authorization" h)
-                                            (format nil "Bearer ~a" raw))
-                                      h)))))
-             (is (not (null (clauth:current-user (funcall plug conn))))))
-           (clauth:update-password! r 'u 'auth-token user
-             '(:current-password "hunter22-extra"
-               :password "fresh-secret-99"
-               :password-confirmation "fresh-secret-99"))
-           ;; same token, same plug, but now rejected
-           (let* ((plug (clauth:load-current-user-from-bearer
-                         r :user-schema 'u :token-schema 'auth-token))
-                  (conn (clug:make-conn
-                         :req (list :headers
-                                    (let ((h (make-hash-table :test 'equal)))
-                                      (setf (gethash "authorization" h)
-                                            (format nil "Bearer ~a" raw))
-                                      h)))))
-             (is (null (clauth:current-user (funcall plug conn))))))
-      (clecto:sqlite-close a))))
-
 (test revoke-tokens-on-credential-change-clears-store
   (multiple-value-bind (r a) (fresh-repo-with-tokens)
     (unwind-protect
@@ -1512,28 +1308,6 @@ echos the current user id (or 'anon')."
                 (raw (nth-value 0 (clauth:create-token r 'auth-token user))))
            (clauth:revoke-tokens-on-credential-change r 'auth-token uid)
            (is (null (clauth:find-and-validate-token r 'auth-token raw))))
-      (clecto:sqlite-close a))))
-
-(test bearer-plug-rejects-wrong-context
-  (multiple-value-bind (r a) (fresh-repo-with-tokens)
-    (unwind-protect
-         (let* ((user (seed-user r "b2@x" "hunter22-extra"))
-                (uid (getf user :id))
-                ;; mint a remember-me token; bearer plug looking for :api
-                ;; must not accept it.
-                (raw (nth-value 0 (clauth:create-token r 'auth-token user
-                                                       :context "remember-me"))))
-           (let* ((plug (clauth:load-current-user-from-bearer
-                         r :user-schema 'u :token-schema 'auth-token
-                         :context "api"))
-                  (conn (clug:make-conn
-                         :req (list :headers
-                                    (let ((h (make-hash-table :test 'equal)))
-                                      (setf (gethash "authorization" h)
-                                            (format nil "Bearer ~a" raw))
-                                      h))))
-                  (out (funcall plug conn)))
-             (is (null (clauth:current-user out)))))
       (clecto:sqlite-close a))))
 
 (test register-surfaces-unique-email-collision
