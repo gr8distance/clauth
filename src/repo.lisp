@@ -27,11 +27,15 @@ also safe to re-call (locked, idempotent)."
 
 (defun authenticate (repo schema-name email password)
   "Look up by EMAIL and verify PASSWORD. Returns the user plist on
-success, NIL otherwise. Performs a dummy Argon2 verify when the email
-is missing OR when the stored row has no password hash (OAuth-only
-accounts, half-initialised rows) so neither timing nor crash behavior
-leaks user existence."
-  (let* ((user (clecto:repo-get-by repo schema-name (list :email email)))
+success, NIL otherwise. Email is lowercased + trimmed to match the
+normalization applied at registration. Performs a dummy Argon2 verify
+when the email is missing OR when the stored row has no password hash
+so neither timing nor crash behavior leaks user existence."
+  (let* ((normalized (and (stringp email)
+                          (string-downcase (string-trim " " email))))
+         (user (and normalized
+                    (clecto:repo-get-by repo schema-name
+                                        (list :email normalized))))
          (stored (and user (getf user :password-hash))))
     (cond
       ((and user stored)

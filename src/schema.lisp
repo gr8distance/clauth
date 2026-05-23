@@ -15,10 +15,18 @@
 
 (defun auth-fields ()
   "Return field specs for a minimal authenticated user. Splice into a
-clecto schema's body."
+clecto schema's body.
+
+:session-version is bumped whenever the user's credentials change
+(password, email). LOAD-CURRENT-USER refuses to attach the record if
+the cookie's recorded version is below the stored value — so changing
+your password from one device invalidates every other device's
+session on its next request."
   '((:email                 :string)
     (:password-hash         :string)
     (:confirmed-at          :naive-datetime)
+    (:session-version       :integer)
     ;; Virtual: present on the changeset but never written to SQL.
     (:password              :string :virtual t)
-    (:password-confirmation :string :virtual t)))
+    (:password-confirmation :string :virtual t)
+    (:current-password      :string :virtual t)))

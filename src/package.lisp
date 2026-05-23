@@ -16,7 +16,8 @@
 
   ;; --- changeset ---
   (:export
-   #:register-changeset #:password-changeset)
+   #:register-changeset #:password-changeset
+   #:change-password-changeset #:change-email-changeset)
 
   ;; --- repo ---
   (:export
@@ -25,4 +26,5 @@
   ;; --- conn / session integration ---
   (:export
    #:login #:logout #:current-user-id
-   #:load-current-user #:current-user #:require-auth))
+   #:load-current-user #:current-user #:require-auth
+   #:session-timeout))

@@ -7,10 +7,12 @@
 (defun register-changeset (schema attrs &key (min-length 8) (max-length 1024))
   "Build a changeset for a fresh signup. Validates email + password +
 :password-confirmation match, then puts the argon2id hash on
-:password-hash. The raw :password stays in the changeset as a virtual
-field and never reaches SQL."
-  (let ((cs (clecto:cast schema attrs
-                         '(:email :password :password-confirmation))))
+:password-hash. Emails are normalized to lowercase before any
+comparison so users can't register the same address twice with
+different casing."
+  (let* ((normalized (normalize-email-attrs attrs))
+         (cs (clecto:cast schema normalized
+                          '(:email :password :password-confirmation))))
     (-> cs
         (clecto:validate-required '(:email :password))
         (clecto:validate-format :email "@")
@@ -19,10 +21,19 @@ field and never reaches SQL."
         (clecto:unique-constraint :email)
         (put-password-hash))))
 
+(defun normalize-email-attrs (attrs)
+  "Return a fresh attrs plist with :email lowercased + trimmed."
+  (let ((email (getf attrs :email)))
+    (if (stringp email)
+        (list* :email (string-downcase (string-trim " " email))
+               (alexandria:remove-from-plist attrs :email))
+        attrs)))
+
 (defun password-changeset (data attrs &key (min-length 8) (max-length 1024))
-  "Build a changeset for changing an existing user's password. DATA is
-the loaded user record (must include the primary key). ATTRS supplies
-:password and :password-confirmation."
+  "Build a changeset for setting an existing user's password without
+re-authentication. Use this from a flow that already verified the
+user some other way (e.g. just-completed password reset). For the
+user-facing 'change my password' form, see CHANGE-PASSWORD-CHANGESET."
   (let* ((with-schema (list* :__schema__ (or (getf data :__schema__)
                                              (error "DATA needs :__schema__"))
                              data))
@@ -33,6 +44,88 @@ the loaded user record (must include the primary key). ATTRS supplies
         (clecto:validate-length :password :min min-length :max max-length)
         (clecto:validate-confirmation :password)
         (put-password-hash))))
+
+(defun change-password-changeset (data attrs &key (min-length 8)
+                                                  (max-length 1024))
+  "Build a changeset for the user-facing 'change my password' form.
+DATA is the loaded user record (with :password-hash and :__schema__).
+ATTRS supplies :current-password, :password, :password-confirmation.
+
+If :current-password doesn't match the stored hash, the error lands on
+:current-password (not on :password) so forms can highlight the right
+field. The current-password check runs even when other fields are also
+invalid so the user sees all errors at once.
+
+KNOWN GAP: no optimistic locking. Two simultaneous requests can both
+pass the current-password check (using the OLD hash), and last-write
+wins on the new password. The other tab silently loses its change but
+sees success. Phoenix has the same default behavior; mitigate at the
+controller level with CSRF (one form, one token) until clecto grows
+WHERE-augmented updates."
+  (let* ((with-schema (list* :__schema__ (or (getf data :__schema__)
+                                             (error "DATA needs :__schema__"))
+                             data))
+         (cs (clecto:cast with-schema attrs
+                          '(:current-password :password :password-confirmation))))
+    (-> cs
+        (validate-current-password data)
+        (clecto:validate-required '(:password))
+        (clecto:validate-length :password :min min-length :max max-length)
+        (clecto:validate-confirmation :password)
+        (put-password-hash)
+        (bump-session-version data))))
+
+(defun change-email-changeset (data attrs)
+  "Build a changeset for an immediate email change, gated by the user's
+current password. DATA is the loaded user record; ATTRS supplies
+:email and :current-password.
+
+NOTE: this updates the email in place. A production flow should send a
+confirmation link to the NEW address before activating it — that needs
+a mailer and lands when clailer ships. Until then, prefer this only
+for low-stakes accounts or admin-driven updates."
+  (let* ((with-schema (list* :__schema__ (or (getf data :__schema__)
+                                             (error "DATA needs :__schema__"))
+                             data))
+         (normalized (normalize-email-attrs attrs))
+         (cs (clecto:cast with-schema normalized '(:email :current-password))))
+    (-> cs
+        (validate-current-password data)
+        (clecto:validate-required '(:email))
+        (clecto:validate-format :email "@")
+        (validate-email-changed data)
+        (clecto:unique-constraint :email)
+        (bump-session-version data))))
+
+(defun validate-email-changed (cs data)
+  "Reject a 'change' that doesn't actually change the address.
+Stops accidental no-op writes from cycling through the audit log later."
+  (let ((new (clecto:get-change cs :email))
+        (old (getf data :email)))
+    (if (and new (string= new old))
+        (clecto:add-error cs :email "did not change")
+        cs)))
+
+(defun bump-session-version (cs data)
+  "Cross-device session invalidation: increment :session-version so any
+other device's cookie (which recorded the OLD version at login time)
+is forcibly logged out on its next request. Call from any flow that
+changes credentials (password, email)."
+  (clecto:put-change cs :session-version
+                     (1+ (or (getf data :session-version) 0))))
+
+(defun validate-current-password (cs data)
+  "Verify :current-password in CS matches DATA's stored :password-hash.
+Pushes an error onto :current-password if mismatched. Constant-time."
+  (let ((supplied (clecto:get-change cs :current-password))
+        (stored   (getf data :password-hash)))
+    (cond
+      ((null supplied)
+       (clecto:add-error cs :current-password "can't be blank"))
+      ((or (null stored)
+           (not (verify-password supplied stored)))
+       (clecto:add-error cs :current-password "is incorrect"))
+      (t cs))))
 
 (defun put-password-hash (cs)
   "If the changeset carries a valid :password change, hash it into
