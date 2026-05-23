@@ -1,16 +1,10 @@
 (in-package #:clauth)
 
-(defmacro -> (init &body forms)
-  "Thread-first — local copy so we don't depend on the caller's."
-  (reduce (lambda (acc f)
-            (if (consp f) (list* (car f) acc (cdr f)) (list f acc)))
-          forms :initial-value init))
-
 ;;; Changeset helpers that wrap clecto's primitives with the standard
 ;;; registration / password-change patterns. Each returns a clecto
 ;;; changeset that's ready for repo-insert / repo-update.
 
-(defun register-changeset (schema attrs &key (min-length 8) (max-length 72))
+(defun register-changeset (schema attrs &key (min-length 8) (max-length 1024))
   "Build a changeset for a fresh signup. Validates email + password +
 :password-confirmation match, then puts the argon2id hash on
 :password-hash. The raw :password stays in the changeset as a virtual
@@ -25,7 +19,7 @@ field and never reaches SQL."
         (clecto:unique-constraint :email)
         (put-password-hash))))
 
-(defun password-changeset (data attrs &key (min-length 8) (max-length 72))
+(defun password-changeset (data attrs &key (min-length 8) (max-length 1024))
   "Build a changeset for changing an existing user's password. DATA is
 the loaded user record (must include the primary key). ATTRS supplies
 :password and :password-confirmation."

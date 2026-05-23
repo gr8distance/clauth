@@ -11,14 +11,19 @@
 
 (defun login (conn user)
   "Mark CONN as authenticated as USER. USER may be a record plist (we
-read its :id) or the bare id value. Rotates the session id to defend
-against session fixation."
+read its :id) or the bare integer id value. STRINGS are deliberately
+NOT accepted — a controller mistakenly forwarding a request param as
+the user id would otherwise let any caller log in as any uid.
+
+Rotates the session id to defend against fixation: an attacker who
+planted a session cookie pre-login no longer rides the new privilege
+level."
   (let ((id (etypecase user
               (cons (or (getf user :id)
                         (error "login: user record has no :id")))
-              (number user)
-              (string user))))
-    (clug:put-session-value conn *session-user-key* id)))
+              (integer user))))
+    (clug:rotate-session-id
+     (clug:put-session-value conn *session-user-key* id))))
 
 (defun logout (conn)
   "Clear the session (and its server-side store entry)."

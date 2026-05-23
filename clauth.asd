@@ -3,14 +3,15 @@
   :version "0.1.0"
   :author "ug <gr8.distance@gmail.com>"
   :license "MIT"
-  :depends-on ("ironclad" "babel" "alexandria"
+  :depends-on ("ironclad" "babel" "alexandria" "bordeaux-threads"
                "clug" "clug/session" "clecto")
   :pathname "src/"
   :components ((:file "package")
+               (:file "util"      :depends-on ("package"))
                (:file "password"  :depends-on ("package"))
                (:file "token"     :depends-on ("package"))
                (:file "schema"    :depends-on ("package"))
-               (:file "changeset" :depends-on ("password" "schema"))
+               (:file "changeset" :depends-on ("util" "password" "schema"))
                (:file "repo"      :depends-on ("password"))
                (:file "plug"      :depends-on ("repo")))
   :in-order-to ((test-op (test-op "clauth/tests"))))
