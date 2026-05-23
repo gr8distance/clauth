@@ -697,6 +697,23 @@ echos the current user id (or 'anon')."
            (is (eq :wrong-password reason)))
       (clecto:sqlite-close a))))
 
+(test failed-attempt-counter-is-atomic
+  ;; Pre-fix: read-modify-write — concurrent failures with the same
+  ;; loaded count both wrote count+1, so two parallel wrong-password
+  ;; attempts only bumped the counter once.
+  ;;
+  ;; Post-fix: the SET clause uses "failed_login_count + 1" so even
+  ;; two failures issued from the SAME loaded user record advance
+  ;; the counter twice.
+  (multiple-value-bind (r a) (fresh-repo)
+    (unwind-protect
+         (let* ((user (seed-user r "race@x" "hunter22")))
+           (clauth::record-failed-attempt! r 'u user 100 60)
+           (clauth::record-failed-attempt! r 'u user 100 60)
+           (let ((reloaded (clecto:repo-get-by r 'u '(:email "race@x"))))
+             (is (= 2 (getf reloaded :failed-login-count)))))
+      (clecto:sqlite-close a))))
+
 (test lockout-respects-custom-thresholds
   (multiple-value-bind (r a) (fresh-repo)
     (unwind-protect

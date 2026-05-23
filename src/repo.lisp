@@ -116,18 +116,28 @@ constant-rate request handling at the controller layer."
      '(:failed-login-count 0 :locked-until nil))))
 
 (defun record-failed-attempt! (repo schema-name user max-attempts lockout-seconds)
-  "Bump the counter; lock the account when MAX-ATTEMPTS is reached."
+  "Bump the counter and (if we crossed the threshold) set the lock.
+
+The bump itself is an atomic SQL-side increment, so two concurrent
+wrong-password requests can't both observe count=N and both write
+count=N+1 — both writes turn into 'failed_login_count + 1' on the
+server. The lock-until path remains a read-modify-write since it's
+conditional on whether THIS attempt crossed MAX-ATTEMPTS; harmless
+because the lock is idempotent (last write wins on the same value)."
   (let* ((count (1+ (or (getf user :failed-login-count) 0)))
          (lock-until (when (>= count max-attempts)
                        (universal-time-to-naive
-                        (+ (get-universal-time) lockout-seconds)))))
+                        (+ (get-universal-time) lockout-seconds))))
+         (set (list :failed-login-count
+                    (list :fragment "\"failed_login_count\" + 1"))))
+    (when lock-until
+      (setf set (append set (list :locked-until lock-until))))
     (clecto:repo-update-all
      repo
      (clecto:where (clecto:from (clecto::intern-table
                                  (clecto::find-schema schema-name)))
                    (list '= :id (getf user :id)))
-     (list :failed-login-count count
-           :locked-until lock-until))))
+     set)))
 
 (defun universal-time-to-naive (univ)
   "Format UNIV (universal-time integer) as 'YYYY-MM-DD HH:MM:SSZ' in UTC.
