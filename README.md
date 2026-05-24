@@ -103,6 +103,22 @@ bordeaux-threads, [clug](https://github.com/gr8distance/clug),
 
 ---
 
+## Database schema
+
+clauth needs two tables in your database: `users` and `auth_tokens`.
+It does **not** ship a migration runner — pick the tool you already
+use (dbmate, golang-migrate, goose, anything that runs SQL).
+
+See [docs/schema.md](./docs/schema.md) for:
+
+- the DDL for [SQLite](./docs/schema-sqlite.md) and [PostgreSQL](./docs/schema-postgres.md)
+- common invariants (unique indexes that clauth depends on)
+- how to apply the migration with each of the three tools above
+- how to splice `auth-fields` / `auth-token-fields` into your clecto
+  `defschema`
+
+---
+
 ## Quickstart
 
 ```lisp
